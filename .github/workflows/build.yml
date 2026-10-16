@@ -1,0 +1,58 @@
+name: Test and build
+
+on:
+  push:
+    branches: [main, "arena/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pytest -v
+
+  build-windows:
+    name: Windows application
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Build executable
+        shell: pwsh
+        run: >-
+          pyinstaller --noconfirm --clean --onefile --windowed
+          --name "Balance-Igor-Yura"
+          --collect-all flask
+          --add-data "finance_balance/templates;finance_balance/templates"
+          --add-data "finance_balance/static;finance_balance/static"
+          run.py
+      - name: Smoke-check artifact
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/Balance-Igor-Yura.exe")) { exit 1 }
+          Get-Item "dist/Balance-Igor-Yura.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Balance-Igor-Yura-Windows
+          path: dist/Balance-Igor-Yura.exe
+          if-no-files-found: error
+          retention-days: 30
