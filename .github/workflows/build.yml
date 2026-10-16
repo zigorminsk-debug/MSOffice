@@ -40,7 +40,8 @@ jobs:
         shell: pwsh
         run: >-
           pyinstaller --noconfirm --clean --onefile --windowed
-          --name "Balance-Igor-Yura"
+          --name "Fitnes"
+          --icon "assets/fitnes-icon.ico"
           --collect-all flask
           --add-data "finance_balance/templates;finance_balance/templates"
           --add-data "finance_balance/static;finance_balance/static"
@@ -48,11 +49,11 @@ jobs:
       - name: Smoke-check artifact
         shell: pwsh
         run: |
-          if (-not (Test-Path "dist/Balance-Igor-Yura.exe")) { exit 1 }
-          Get-Item "dist/Balance-Igor-Yura.exe"
+          if (-not (Test-Path "dist/Fitnes.exe")) { exit 1 }
+          Get-Item "dist/Fitnes.exe"
       - uses: actions/upload-artifact@v4
         with:
-          name: Balance-Igor-Yura-Windows
-          path: dist/Balance-Igor-Yura.exe
+          name: Fitnes-Windows
+          path: dist/Fitnes.exe
           if-no-files-found: error
           retention-days: 30

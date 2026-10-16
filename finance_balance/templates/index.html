@@ -2,11 +2,11 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Баланс · Игорь и Юра</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <title>Fitnes · Игорь и Юра</title><link rel="icon" href="{{ url_for('static', filename='fitnes-icon.png') }}"><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
 <header class="topbar">
-  <div class="brand"><span class="brand-mark">Б</span><div><strong>Сводный баланс</strong><small>Игорь · Юра</small></div></div>
+  <div class="brand"><span class="brand-mark">F</span><div><strong>Fitnes</strong><small>{{ active_database }} · Игорь · Юра</small></div></div>
   <div class="header-actions"><a class="button secondary" href="{{ url_for('help_page') }}">? Инструкция</a><a class="button secondary" href="{{ url_for('export_csv') }}">↓ Экспорт CSV</a>{% if protected %}<form method="post" action="{{ url_for('logout') }}"><button class="button secondary" type="submit">Выйти</button></form>{% endif %}</div>
 </header>
 <main>
@@ -75,7 +75,7 @@
     </section>
   </div>
 </main>
-<footer>Данные хранятся локально · Курсы USD: официальный API НБРБ · Сводный баланс v1.1</footer>
+<footer>Данные хранятся локально · Курсы USD: официальный API НБРБ · Fitnes v2.0</footer>
 <script>
   const kind=document.getElementById('kind'),sign=document.getElementById('sign'),currency=document.getElementById('currency'),rate=document.getElementById('rate-label'),hint=document.getElementById('operation-hint');
   function updateKind(){const option=kind.selectedOptions[0];sign.value=option.dataset.sign;if(option.dataset.mode==='deposit_add')hint.innerHTML='<b>Займ:</b> сумма зачислится на отдельный депозит выбранного собственника и не изменит взаимный долг.';else if(option.dataset.mode==='deposit_use')hint.innerHTML='<b>Использование займа:</b> сумма уменьшит депозит выбранного собственника и не изменит взаимный долг.';else hint.innerHTML='<b>Правило:</b> «+» увеличивает задолженность выбранного собственника перед вторым, «−» уменьшает её.'}

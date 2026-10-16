@@ -35,10 +35,10 @@ KINDS = {
 
 
 def default_db_path() -> Path:
-    """Хранит базу рядом с программой, чтобы EXE можно было заменять отдельно."""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent / "balance.db"
-    return Path(__file__).resolve().parent.parent / "balance.db"
+    """Хранит базу рядом с Fitnes и сохраняет совместимость с balance.db."""
+    directory = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
+    legacy = directory / "balance.db"
+    return legacy if legacy.exists() else directory / "fitnes.db"
 
 
 def decimal_value(value: str | int | Decimal) -> Decimal:
@@ -82,7 +82,7 @@ class NBRBRateProvider:
         query = urllib.parse.urlencode({"parammode": "2", "ondate": operation_date})
         request = urllib.request.Request(
             f"{self.endpoint}?{query}",
-            headers={"User-Agent": "IgorYuraBalance/1.1", "Accept": "application/json"},
+            headers={"User-Agent": "Fitnes/2.0", "Accept": "application/json"},
         )
         try:
             with urllib.request.urlopen(request, timeout=10) as response:

@@ -8,4 +8,5 @@ dist/
 *.spec
 *.db
 balance-config.json
+fitnes-config.json
 *.csv

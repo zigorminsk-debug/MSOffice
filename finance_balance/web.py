@@ -8,14 +8,19 @@ from pathlib import Path
 from flask import Flask, flash, redirect, render_template, request, send_file, session, url_for
 
 from .core import CURRENCIES, KINDS, OWNERS, Ledger, format_money
-from .security import SecurityConfig
+from .security import DatabaseSecurity, SecurityConfig
 
 
-def create_app(db_path: str | Path | None = None, security: SecurityConfig | None = None) -> Flask:
+def create_app(
+    db_path: str | Path | None = None,
+    security: SecurityConfig | None = None,
+    database_security: DatabaseSecurity | None = None,
+) -> Flask:
     app = Flask(__name__)
     app.config["SECRET_KEY"] = os.environ.get("BALANCE_SECRET", security.session_secret if security else "local-balance-app")
     app.config["LEDGER"] = Ledger(db_path)
     app.config["SECURITY"] = security
+    app.config["DATABASE_SECURITY"] = database_security
     app.jinja_env.filters["money"] = format_money
 
     @app.before_request
@@ -36,13 +41,16 @@ def create_app(db_path: str | Path | None = None, security: SecurityConfig | Non
             return redirect(url_for("index"))
         error = None
         if request.method == "POST":
-            if access.verify(request.form.get("password", "")):
+            app_ok = access.verify(request.form.get("password", ""))
+            db_access: DatabaseSecurity | None = app.config["DATABASE_SECURITY"]
+            db_ok = not db_access or not db_access.configured or db_access.verify(request.form.get("database_password", ""))
+            if app_ok and db_ok:
                 session.clear()
                 session["authenticated"] = True
                 destination = request.args.get("next", "")
                 return redirect(destination if destination.startswith("/") else url_for("index"))
-            error = "Неверный пароль"
-        return render_template("login.html", error=error)
+            error = "Неверный пароль Fitnes или пароль базы"
+        return render_template("login.html", error=error, require_database_password=bool(app.config["DATABASE_SECURITY"]))
 
     @app.post("/logout")
     def logout():
@@ -60,6 +68,7 @@ def create_app(db_path: str | Path | None = None, security: SecurityConfig | Non
             owners=OWNERS,
             currencies=CURRENCIES,
             protected=security is not None and security.configured,
+            active_database=security.database_name(db_path) if security else Path(str(db_path or "fitnes.db")).stem,
             today=date.today().isoformat(),
         )
 
@@ -96,7 +105,7 @@ def create_app(db_path: str | Path | None = None, security: SecurityConfig | Non
         ledger: Ledger = app.config["LEDGER"]
         export_dir = Path(tempfile.gettempdir()) / "balance_exports"
         export_dir.mkdir(exist_ok=True)
-        target = ledger.export_csv(export_dir / f"balance-{date.today().isoformat()}.csv")
+        target = ledger.export_csv(export_dir / f"fitnes-{date.today().isoformat()}.csv")
         return send_file(target, as_attachment=True, download_name=target.name)
 
     @app.get("/help")
@@ -114,4 +123,5 @@ def run_web(db_path: str | Path | None = None, host: str = "127.0.0.1", port: in
     security = SecurityConfig()
     if not security.configured:
         raise SystemExit("Сначала запустите GUI и создайте пароль при первом запуске.")
-    create_app(db_path or security.database_path, security).run(host=host, port=port, debug=False)
+    selected_db = db_path or security.database_path
+    create_app(selected_db, security, DatabaseSecurity(selected_db)).run(host=host, port=port, debug=False)

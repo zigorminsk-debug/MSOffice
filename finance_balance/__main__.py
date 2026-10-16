@@ -5,7 +5,7 @@ import os
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Сводный баланс Игоря и Юры")
+    parser = argparse.ArgumentParser(description="Fitnes — финансовый баланс Игоря и Юры")
     parser.add_argument("mode", nargs="?", choices=("gui", "web"), default="gui")
     parser.add_argument("--db", help="Путь к файлу базы данных")
     parser.add_argument("--host", default=os.environ.get("BALANCE_HOST", "127.0.0.1"))
