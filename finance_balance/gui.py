@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from .core import KINDS, Ledger, format_money
+from .help_content import HELP_TEXT
 from .web import create_app
 
 
@@ -43,6 +44,7 @@ class BalanceGUI(tk.Tk):
         self.debt_title = tk.Label(left, bg="#16221d", fg="white", font=("Segoe UI", 12)); self.debt_title.pack(anchor="w")
         self.debt_value = tk.Label(left, bg="#16221d", fg="white", font=("Segoe UI", 24, "bold")); self.debt_value.pack(anchor="w")
         actions = tk.Frame(header, bg="#16221d"); actions.pack(side="right", padx=28)
+        ttk.Button(actions, text="Инструкция", command=self.show_help).pack(side="left", padx=5)
         ttk.Button(actions, text="HTML-интерфейс", command=self.open_web).pack(side="left", padx=5)
         ttk.Button(actions, text="Экспорт CSV", command=self.export).pack(side="left", padx=5)
 
@@ -137,6 +139,30 @@ class BalanceGUI(tk.Tk):
     def export(self) -> None:
         target = filedialog.asksaveasfilename(parent=self, defaultextension=".csv", filetypes=[("CSV", "*.csv")], initialfile=f"balance-{date.today().isoformat()}.csv")
         if target: self.ledger.export_csv(target); messagebox.showinfo("Экспорт", "Файл успешно сохранён", parent=self)
+
+    def show_help(self) -> None:
+        window = tk.Toplevel(self)
+        window.title("Инструкция — Сводный баланс")
+        window.geometry("820x700")
+        window.minsize(620, 450)
+        window.configure(bg="#f1f4f0")
+        header = tk.Frame(window, bg="#16221d")
+        header.pack(fill="x")
+        tk.Label(header, text="Инструкция и примеры заполнения", bg="#16221d", fg="white",
+                 font=("Segoe UI", 16, "bold"), padx=22, pady=16).pack(anchor="w")
+        frame = tk.Frame(window, bg="#fff")
+        frame.pack(fill="both", expand=True, padx=18, pady=18)
+        scrollbar = ttk.Scrollbar(frame)
+        scrollbar.pack(side="right", fill="y")
+        text = tk.Text(frame, wrap="word", yscrollcommand=scrollbar.set, bg="#fff", fg="#26342d",
+                       relief="flat", padx=24, pady=20, font=("Segoe UI", 10), spacing1=2, spacing3=5)
+        text.pack(fill="both", expand=True)
+        scrollbar.config(command=text.yview)
+        text.insert("1.0", HELP_TEXT)
+        text.config(state="disabled")
+        ttk.Button(window, text="Закрыть", command=window.destroy).pack(pady=(0, 16))
+        window.transient(self)
+        window.focus_set()
 
     def open_web(self) -> None:
         if not self.web_started:

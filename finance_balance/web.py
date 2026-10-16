@@ -65,6 +65,10 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         target = ledger.export_csv(export_dir / f"balance-{date.today().isoformat()}.csv")
         return send_file(target, as_attachment=True, download_name=target.name)
 
+    @app.get("/help")
+    def help_page():
+        return render_template("help.html")
+
     @app.get("/health")
     def health():
         return {"status": "ok"}

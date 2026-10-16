@@ -13,6 +13,9 @@ def test_web_add_and_export(tmp_path):
     assert response.status_code == 200
     assert "1\u00a0200,50".encode() in response.data
     assert client.get("/health").json == {"status": "ok"}
+    help_page = client.get("/help")
+    assert help_page.status_code == 200
+    assert "Примеры обычных операций".encode("utf-8") in help_page.data
     exported = client.get("/export.csv")
     assert exported.status_code == 200
     assert "attachment" in exported.headers["Content-Disposition"]
