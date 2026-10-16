@@ -7,7 +7,7 @@ from pathlib import Path
 
 from flask import Flask, flash, redirect, render_template, request, send_file, url_for
 
-from .core import KINDS, Ledger, format_money
+from .core import CURRENCIES, KINDS, OWNERS, Ledger, format_money
 
 
 def create_app(db_path: str | Path | None = None) -> Flask:
@@ -24,6 +24,8 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             entries=ledger.list(),
             summary=ledger.summary(),
             kinds=KINDS,
+            owners=OWNERS,
+            currencies=CURRENCIES,
             today=date.today().isoformat(),
         )
 
@@ -36,6 +38,9 @@ def create_app(db_path: str | Path | None = None) -> Flask:
                 kind=request.form.get("kind", ""),
                 amount=request.form.get("amount", ""),
                 sign=request.form.get("sign", ""),
+                owner=request.form.get("owner", ""),
+                currency=request.form.get("currency", "BYN"),
+                fx_rate=request.form.get("fx_rate", ""),
                 from_party=request.form.get("from_party", ""),
                 to_party=request.form.get("to_party", ""),
                 description=request.form.get("description", ""),

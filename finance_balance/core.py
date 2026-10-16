@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import csv
+import json
 import sqlite3
+import sys
+import urllib.parse
+import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
@@ -10,40 +14,87 @@ from pathlib import Path
 from typing import Iterator
 
 OWNERS = ("Игорь", "Юра")
+CURRENCIES = ("BYN", "USD")
+# Код: название, раздел, рекомендуемый знак, режим расчёта.
 KINDS = {
-    "credit": ("Кредит", "Приход", 1),
-    "income": ("Иное поступление", "Приход", 1),
-    "interest": ("Проценты банка", "Расход", 1),
-    "fine": ("Штраф", "Расход", 1),
-    "leasing": ("Лизинг", "Расход", 1),
-    "investment": ("Инвестиционные расходы", "Расход", 1),
-    "repayment_bank": ("Возврат долга — перечисление", "Возврат", -1),
-    "repayment_cash": ("Возврат долга — наличные", "Возврат", -1),
-    "igor_personal": ("Личная покупка Игоря", "Личная покупка", -1),
-    "adjustment": ("Корректировка", "Корректировка", 1),
+    "credit": ("Кредит", "Приход", 1, "debt"),
+    "income": ("Иное поступление", "Приход", 1, "debt"),
+    "purchase": ("Покупка товаров", "Расход", 1, "debt"),
+    "cash_withdrawal": ("Снятие наличных", "Расход", 1, "debt"),
+    "interest": ("Проценты банка", "Расход", 1, "debt"),
+    "fine": ("Штраф", "Расход", 1, "debt"),
+    "leasing": ("Лизинг", "Расход", 1, "debt"),
+    "investment": ("Инвестиционные расходы", "Расход", 1, "debt"),
+    "repayment_bank": ("Возврат долга — перечисление", "Возврат", -1, "debt"),
+    "repayment_cash": ("Возврат долга — наличные", "Возврат", -1, "debt"),
+    "personal_purchase": ("Личная покупка", "Личная покупка", 1, "debt"),
+    "loan_deposit": ("Выдан займ (зачислить на депозит)", "Займы", 1, "deposit_add"),
+    "loan_use": ("Перечислено из займа / снято", "Займы", -1, "deposit_use"),
+    "adjustment": ("Корректировка задолженности", "Корректировка", 1, "debt"),
 }
 
 
 def default_db_path() -> Path:
-    return Path.home() / ".igor_yura_balance" / "balance.db"
+    """Хранит базу рядом с программой, чтобы EXE можно было заменять отдельно."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "balance.db"
+    return Path(__file__).resolve().parent.parent / "balance.db"
+
+
+def decimal_value(value: str | int | Decimal) -> Decimal:
+    normalized = str(value).strip().replace(" ", "").replace("\u00a0", "").replace(",", ".")
+    try:
+        result = Decimal(normalized)
+    except InvalidOperation as exc:
+        raise ValueError("Введите корректное число") from exc
+    if result <= 0:
+        raise ValueError("Значение должно быть больше нуля")
+    return result
 
 
 def money_to_cents(value: str | int | Decimal) -> int:
     if isinstance(value, int):
         return value
-    normalized = str(value).strip().replace(" ", "").replace(",", ".")
-    try:
-        amount = Decimal(normalized).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    except InvalidOperation as exc:
-        raise ValueError("Введите корректную сумму") from exc
-    if amount <= 0:
-        raise ValueError("Сумма должна быть больше нуля")
+    amount = decimal_value(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return int(amount * 100)
 
 
-def format_money(cents: int) -> str:
+def format_number(cents: int) -> str:
     value = Decimal(cents) / 100
-    return f"{value:,.2f}".replace(",", " ").replace(".", ",") + " ₽"
+    return f"{value:,.2f}".replace(",", " ").replace(".", ",")
+
+
+def format_money(cents: int, currency: str = "BYN") -> str:
+    symbol = "Br" if currency == "BYN" else "$"
+    return f"{format_number(cents)} {symbol}"
+
+
+class NBRBRateProvider:
+    """Получение официального курса НБРБ с api.nbrb.by."""
+
+    endpoint = "https://api.nbrb.by/exrates/rates/USD"
+
+    def get_usd_rate(self, operation_date: str) -> Decimal:
+        try:
+            date.fromisoformat(operation_date)
+        except ValueError as exc:
+            raise ValueError("Некорректная дата для получения курса") from exc
+        query = urllib.parse.urlencode({"parammode": "2", "ondate": operation_date})
+        request = urllib.request.Request(
+            f"{self.endpoint}?{query}",
+            headers={"User-Agent": "IgorYuraBalance/1.1", "Accept": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                payload = json.load(response)
+            rate = Decimal(str(payload["Cur_OfficialRate"])) / Decimal(str(payload.get("Cur_Scale", 1)))
+        except Exception as exc:
+            raise ValueError(
+                "Не удалось получить курс USD с сайта НБРБ. Проверьте интернет или укажите курс вручную."
+            ) from exc
+        if rate <= 0:
+            raise ValueError("НБРБ вернул некорректный курс")
+        return rate
 
 
 @dataclass(frozen=True)
@@ -57,24 +108,52 @@ class Entry:
     to_party: str
     description: str
     created_at: str
+    owner: str = "Юра"
+    currency: str = "BYN"
+    fx_rate: str = "1"
+    amount_byn_cents: int = 0
+
+    @property
+    def mode(self) -> str:
+        return KINDS.get(self.kind, ("", "", 0, "debt"))[3]
 
     @property
     def effect_cents(self) -> int:
-        return self.amount_cents * self.sign
+        if self.mode != "debt":
+            return 0
+        owner_direction = 1 if self.owner == "Юра" else -1
+        return self.byn_cents * self.sign * owner_direction
+
+    @property
+    def deposit_effect_cents(self) -> int:
+        if self.mode == "deposit_add":
+            return self.byn_cents
+        if self.mode == "deposit_use":
+            return -self.byn_cents
+        return 0
+
+    @property
+    def byn_cents(self) -> int:
+        return self.amount_byn_cents or self.amount_cents
 
     @property
     def kind_label(self) -> str:
-        return KINDS.get(self.kind, (self.kind, "", 0))[0]
+        return KINDS.get(self.kind, (self.kind, "", 0, "debt"))[0]
 
     @property
     def section(self) -> str:
-        return KINDS.get(self.kind, ("", "Корректировка", 0))[1]
+        return KINDS.get(self.kind, ("", "Корректировка", 0, "debt"))[1]
+
+    @property
+    def original_money(self) -> str:
+        return format_money(self.amount_cents, self.currency)
 
 
 class Ledger:
-    def __init__(self, db_path: str | Path | None = None):
+    def __init__(self, db_path: str | Path | None = None, rate_provider: NBRBRateProvider | None = None):
         self.db_path = Path(db_path) if db_path else default_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.rate_provider = rate_provider or NBRBRateProvider()
         self._initialize()
 
     @contextmanager
@@ -100,10 +179,25 @@ class Ledger:
                     from_party TEXT NOT NULL DEFAULT '',
                     to_party TEXT NOT NULL DEFAULT '',
                     description TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    owner TEXT NOT NULL DEFAULT 'Юра',
+                    currency TEXT NOT NULL DEFAULT 'BYN',
+                    fx_rate TEXT NOT NULL DEFAULT '1',
+                    amount_byn_cents INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
+            existing = {row[1] for row in db.execute("PRAGMA table_info(entries)")}
+            migrations = {
+                "owner": "ALTER TABLE entries ADD COLUMN owner TEXT NOT NULL DEFAULT 'Юра'",
+                "currency": "ALTER TABLE entries ADD COLUMN currency TEXT NOT NULL DEFAULT 'BYN'",
+                "fx_rate": "ALTER TABLE entries ADD COLUMN fx_rate TEXT NOT NULL DEFAULT '1'",
+                "amount_byn_cents": "ALTER TABLE entries ADD COLUMN amount_byn_cents INTEGER NOT NULL DEFAULT 0",
+            }
+            for column, sql in migrations.items():
+                if column not in existing:
+                    db.execute(sql)
+            db.execute("UPDATE entries SET amount_byn_cents = amount_cents WHERE amount_byn_cents = 0")
             db.execute("CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(operation_date, id)")
 
     def add(
@@ -113,6 +207,9 @@ class Ledger:
         kind: str,
         amount: str | int | Decimal,
         sign: int | str,
+        owner: str = "Юра",
+        currency: str = "BYN",
+        fx_rate: str | Decimal | None = None,
         from_party: str = "",
         to_party: str = "",
         description: str = "",
@@ -123,26 +220,29 @@ class Ledger:
             date.fromisoformat(operation_date)
         except ValueError as exc:
             raise ValueError("Некорректная дата") from exc
+        if owner not in OWNERS:
+            raise ValueError("Выберите, на чей баланс относится сумма")
+        if currency not in CURRENCIES:
+            raise ValueError("Поддерживаются только BYN и USD")
         sign_int = int(sign)
         if sign_int not in (-1, 1):
             raise ValueError("Знак должен быть + или −")
         cents = money_to_cents(amount) if not isinstance(amount, int) else amount
         if cents <= 0:
             raise ValueError("Сумма должна быть больше нуля")
+        if currency == "USD":
+            rate = decimal_value(fx_rate) if fx_rate and str(fx_rate).strip() else self.rate_provider.get_usd_rate(operation_date)
+        else:
+            rate = Decimal("1")
+        byn_cents = int((Decimal(cents) * rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
         with self.connect() as db:
             cursor = db.execute(
                 """INSERT INTO entries
-                (operation_date, kind, amount_cents, sign, from_party, to_party, description)
-                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    operation_date,
-                    kind,
-                    cents,
-                    sign_int,
-                    from_party.strip(),
-                    to_party.strip(),
-                    description.strip(),
-                ),
+                (operation_date, kind, amount_cents, sign, from_party, to_party, description,
+                 owner, currency, fx_rate, amount_byn_cents)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (operation_date, kind, cents, sign_int, from_party.strip(), to_party.strip(),
+                 description.strip(), owner, currency, str(rate), byn_cents),
             )
             return int(cursor.lastrowid)
 
@@ -153,47 +253,38 @@ class Ledger:
 
     def list(self) -> list[Entry]:
         with self.connect() as db:
-            rows = db.execute(
-                "SELECT * FROM entries ORDER BY operation_date DESC, id DESC"
-            ).fetchall()
+            rows = db.execute("SELECT * FROM entries ORDER BY operation_date DESC, id DESC").fetchall()
         return [Entry(**dict(row)) for row in rows]
 
     def summary(self) -> dict[str, int]:
         entries = self.list()
         debt = sum(item.effect_cents for item in entries)
-        incoming = sum(item.amount_cents for item in entries if item.section == "Приход")
-        expenses = sum(item.amount_cents for item in entries if item.section == "Расход")
-        repayments = sum(-item.effect_cents for item in entries if item.effect_cents < 0)
-        increases = sum(item.effect_cents for item in entries if item.effect_cents > 0)
         return {
             "debt": debt,
             "igor": debt,
             "yura": -debt,
-            "incoming": incoming,
-            "expenses": expenses,
-            "repayments": repayments,
-            "increases": increases,
+            "incoming": sum(item.byn_cents for item in entries if item.section == "Приход"),
+            "expenses": sum(item.byn_cents for item in entries if item.section == "Расход"),
+            "repayments": sum(item.byn_cents for item in entries if item.mode == "debt" and item.sign < 0),
+            "increases": sum(item.byn_cents for item in entries if item.mode == "debt" and item.sign > 0),
+            "igor_deposit": sum(item.deposit_effect_cents for item in entries if item.owner == "Игорь"),
+            "yura_deposit": sum(item.deposit_effect_cents for item in entries if item.owner == "Юра"),
         }
 
     def export_csv(self, destination: str | Path) -> Path:
         target = Path(destination)
         with target.open("w", encoding="utf-8-sig", newline="") as stream:
             writer = csv.writer(stream, delimiter=";")
-            writer.writerow(
-                ["Дата", "Раздел", "Операция", "Знак", "Сумма", "От кого", "Кому", "Пояснение", "Изменение долга"]
-            )
+            writer.writerow(["Дата", "Раздел", "Операция", "Баланс", "Знак", "Сумма", "Валюта",
+                             "Курс НБРБ", "Сумма BYN", "От кого", "Кому", "Пояснение",
+                             "Изменение взаимного долга", "Изменение депозита займа"])
             for item in reversed(self.list()):
-                writer.writerow(
-                    [
-                        item.operation_date,
-                        item.section,
-                        item.kind_label,
-                        "+" if item.sign > 0 else "−",
-                        f"{Decimal(item.amount_cents) / 100:.2f}",
-                        item.from_party,
-                        item.to_party,
-                        item.description,
-                        f"{Decimal(item.effect_cents) / 100:.2f}",
-                    ]
-                )
+                writer.writerow([
+                    item.operation_date, item.section, item.kind_label, item.owner,
+                    "+" if item.sign > 0 else "−", f"{Decimal(item.amount_cents) / 100:.2f}",
+                    item.currency, item.fx_rate, f"{Decimal(item.byn_cents) / 100:.2f}",
+                    item.from_party, item.to_party, item.description,
+                    f"{Decimal(item.effect_cents) / 100:.2f}",
+                    f"{Decimal(item.deposit_effect_cents) / 100:.2f}",
+                ])
         return target

@@ -1,103 +1,85 @@
 <!doctype html>
 <html lang="ru">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Баланс · Игорь и Юра</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Баланс · Игорь и Юра</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand"><span class="brand-mark">Б</span><div><strong>Сводный баланс</strong><small>Игорь · Юра</small></div></div>
-    <a class="button secondary" href="{{ url_for('export_csv') }}">↓ Экспорт CSV</a>
-  </header>
-
-  <main>
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}
-    {% endwith %}
-
-    <section class="hero">
-      <div>
-        <span class="eyebrow">ТЕКУЩИЙ ИТОГ</span>
-        {% if summary.debt > 0 %}
-          <h1>Юра должен Игорю</h1><div class="hero-value">{{ summary.debt|money }}</div>
-        {% elif summary.debt < 0 %}
-          <h1>Игорь должен Юре</h1><div class="hero-value">{{ (-summary.debt)|money }}</div>
-        {% else %}
-          <h1>Расчёты закрыты</h1><div class="hero-value">0,00 ₽</div>
-        {% endif %}
-        <p>«+» увеличивает долг Юры перед Игорем, «−» уменьшает его.</p>
-      </div>
-      <div class="owner-balances">
-        <div><span>Игорь</span><strong class="positive">{{ summary.igor|money }}</strong><small>к получению</small></div>
-        <div><span>Юра</span><strong class="negative">{{ summary.yura|money }}</strong><small>сальдо</small></div>
-      </div>
-    </section>
-
-    <section class="stats">
-      <article><span>Приход</span><strong>{{ summary.incoming|money }}</strong></article>
-      <article><span>Расходы по обязательствам</span><strong>{{ summary.expenses|money }}</strong></article>
-      <article><span>Всего начислено (+)</span><strong>{{ summary.increases|money }}</strong></article>
-      <article><span>Погашено / зачтено (−)</span><strong>{{ summary.repayments|money }}</strong></article>
-    </section>
-
-    <div class="layout">
-      <section class="card form-card">
-        <div class="section-title"><div><span class="eyebrow">НОВАЯ ЗАПИСЬ</span><h2>Добавить операцию</h2></div></div>
-        <form method="post" action="{{ url_for('add_entry') }}" id="entry-form">
-          <label>Дата<input type="date" name="operation_date" value="{{ today }}" required></label>
-          <label>Вид операции
-            <select name="kind" id="kind" required>
-              {% for code, item in kinds.items() %}<option value="{{ code }}" data-sign="{{ item[2] }}">{{ item[1] }} · {{ item[0] }}</option>{% endfor %}
-            </select>
-          </label>
-          <div class="amount-row">
-            <label class="sign-label">Действие
-              <select name="sign" id="sign"><option value="1">＋ увеличить долг</option><option value="-1">− уменьшить долг</option></select>
-            </label>
-            <label>Сумма, ₽<input type="text" inputmode="decimal" name="amount" placeholder="0,00" required></label>
-          </div>
-          <div class="amount-row">
-            <label>От кого<input type="text" name="from_party" placeholder="Банк, Юра, компания…"></label>
-            <label>Кому<input type="text" name="to_party" placeholder="Юра, Игорь, поставщик…"></label>
-          </div>
-          <label>Пояснение<textarea name="description" rows="3" placeholder="Назначение платежа или основание расчёта"></textarea></label>
-          <div class="hint"><b>Пример:</b> кредит, полученный Юрой, — «+»; возврат Юрой денег или личная покупка Игоря — «−».</div>
-          <button class="button primary" type="submit">Добавить в расчёт</button>
-        </form>
-      </section>
-
-      <section class="card ledger-card">
-        <div class="section-title"><div><span class="eyebrow">ЖУРНАЛ</span><h2>История операций</h2></div><span class="count">{{ entries|length }} записей</span></div>
-        {% if entries %}
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Дата / операция</th><th>Направление</th><th>Сумма</th><th>Изменение долга</th><th></th></tr></thead>
-            <tbody>
-            {% for entry in entries %}
-              <tr>
-                <td><strong>{{ entry.kind_label }}</strong><small>{{ entry.operation_date }} · {{ entry.section }}</small>{% if entry.description %}<em>{{ entry.description }}</em>{% endif %}</td>
-                <td><span>{{ entry.from_party or '—' }}</span><small>→ {{ entry.to_party or '—' }}</small></td>
-                <td>{{ entry.amount_cents|money }}</td>
-                <td><span class="effect {{ 'up' if entry.sign > 0 else 'down' }}">{{ '+' if entry.sign > 0 else '−' }} {{ entry.amount_cents|money }}</span></td>
-                <td><form method="post" action="{{ url_for('delete_entry', entry_id=entry.id) }}" onsubmit="return confirm('Удалить эту операцию?')"><button class="delete" title="Удалить">×</button></form></td>
-              </tr>
-            {% endfor %}
-            </tbody>
-          </table>
-        </div>
-        {% else %}
-          <div class="empty"><div>₽</div><h3>Операций пока нет</h3><p>Добавьте первую запись слева. Итог пересчитается автоматически.</p></div>
-        {% endif %}
-      </section>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark">Б</span><div><strong>Сводный баланс</strong><small>Игорь · Юра</small></div></div>
+  <a class="button secondary" href="{{ url_for('export_csv') }}">↓ Экспорт CSV</a>
+</header>
+<main>
+  {% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}
+  <section class="hero">
+    <div><span class="eyebrow">ТЕКУЩИЙ ИТОГ В BYN</span>
+      {% if summary.debt > 0 %}<h1>Юра должен Игорю</h1><div class="hero-value">{{ summary.debt|money }}</div>
+      {% elif summary.debt < 0 %}<h1>Игорь должен Юре</h1><div class="hero-value">{{ (-summary.debt)|money }}</div>
+      {% else %}<h1>Расчёты закрыты</h1><div class="hero-value">0,00 Br</div>{% endif %}
+      <p>Сумма относится на баланс выбранного собственника. Валюта пересчитывается в BYN на дату операции.</p>
     </div>
-  </main>
-  <footer>Данные хранятся локально на вашем компьютере · Сводный баланс v1.0</footer>
-  <script>
-    const kind = document.getElementById('kind'), sign = document.getElementById('sign');
-    kind.addEventListener('change', () => sign.value = kind.selectedOptions[0].dataset.sign);
-    kind.dispatchEvent(new Event('change'));
-  </script>
-</body>
-</html>
+    <div class="owner-balances">
+      <div><span>Игорь · сальдо</span><strong class="positive">{{ summary.igor|money }}</strong><small>«+» означает к получению</small></div>
+      <div><span>Юра · сальдо</span><strong class="negative">{{ summary.yura|money }}</strong><small>«−» означает задолженность</small></div>
+    </div>
+  </section>
+  <section class="stats loan-stats">
+    <article><span>Приход</span><strong>{{ summary.incoming|money }}</strong></article>
+    <article><span>Расходы</span><strong>{{ summary.expenses|money }}</strong></article>
+    <article><span>Депозит займа · Игорь</span><strong>{{ summary.igor_deposit|money }}</strong></article>
+    <article><span>Депозит займа · Юра</span><strong>{{ summary.yura_deposit|money }}</strong></article>
+  </section>
+
+  <div class="layout">
+    <section class="card form-card">
+      <div class="section-title"><div><span class="eyebrow">НОВАЯ ЗАПИСЬ</span><h2>Добавить операцию</h2></div></div>
+      <form method="post" action="{{ url_for('add_entry') }}">
+        <div class="amount-row">
+          <label>Дата<input type="date" name="operation_date" value="{{ today }}" required></label>
+          <label>На чей баланс
+            <select name="owner" required>{% for owner in owners %}<option value="{{ owner }}" {{ 'selected' if owner == 'Юра' }}>{{ owner }}</option>{% endfor %}</select>
+          </label>
+        </div>
+        <label>Вид операции<select name="kind" id="kind" required>{% for code, item in kinds.items() %}<option value="{{ code }}" data-sign="{{ item[2] }}" data-mode="{{ item[3] }}">{{ item[1] }} · {{ item[0] }}</option>{% endfor %}</select></label>
+        <div class="amount-row">
+          <label>Действие<select name="sign" id="sign"><option value="1">＋ увеличить задолженность</option><option value="-1">− уменьшить задолженность</option></select></label>
+          <label>Сумма<input type="text" inputmode="decimal" name="amount" placeholder="0,00" required></label>
+        </div>
+        <div class="amount-row">
+          <label>Валюта<select name="currency" id="currency">{% for currency in currencies %}<option>{{ currency }}</option>{% endfor %}</select></label>
+          <label id="rate-label">Курс USD, BYN<input type="text" inputmode="decimal" name="fx_rate" placeholder="Автоматически с НБРБ"><small class="field-help">Оставьте пустым для загрузки курса НБРБ.</small></label>
+        </div>
+        <div class="amount-row">
+          <label>От кого<input type="text" name="from_party" placeholder="Банк, Юра, компания…"></label>
+          <label>Кому<input type="text" name="to_party" placeholder="Игорь, магазин…"></label>
+        </div>
+        <label>Пояснение<textarea name="description" rows="3" placeholder="Назначение платежа или основание расчёта"></textarea></label>
+        <div class="hint" id="operation-hint"><b>Правило:</b> «+» увеличивает задолженность выбранного собственника перед вторым, «−» уменьшает её.</div>
+        <button class="button primary" type="submit">Добавить в расчёт</button>
+      </form>
+    </section>
+
+    <section class="card ledger-card">
+      <div class="section-title"><div><span class="eyebrow">ЖУРНАЛ В BYN</span><h2>История операций</h2></div><span class="count">{{ entries|length }} записей</span></div>
+      {% if entries %}<div class="table-wrap"><table>
+        <thead><tr><th>Дата / операция</th><th>Баланс / направление</th><th>Исходная сумма</th><th>Сумма BYN</th><th>Влияние</th><th></th></tr></thead>
+        <tbody>{% for entry in entries %}<tr>
+          <td><strong>{{ entry.kind_label }}</strong><small>{{ entry.operation_date }} · {{ entry.section }}</small>{% if entry.description %}<em>{{ entry.description }}</em>{% endif %}</td>
+          <td><strong>{{ entry.owner }}</strong><small>{{ entry.from_party or '—' }} → {{ entry.to_party or '—' }}</small></td>
+          <td>{{ entry.amount_cents|money(entry.currency) }}{% if entry.currency == 'USD' %}<small>курс {{ entry.fx_rate }} BYN</small>{% endif %}</td>
+          <td>{{ entry.byn_cents|money }}</td>
+          <td>{% if entry.mode == 'debt' %}<span class="effect {{ 'up' if entry.effect_cents > 0 else 'down' }}">{% if entry.effect_cents > 0 %}Юра → Игорю +{% else %}Игорь → Юре +{% endif %} {{ (entry.effect_cents|abs)|money }}</span>{% else %}<span class="effect {{ 'up' if entry.deposit_effect_cents < 0 else 'down' }}">Депозит {{ '+' if entry.deposit_effect_cents > 0 else '−' }} {{ (entry.deposit_effect_cents|abs)|money }}</span>{% endif %}</td>
+          <td><form method="post" action="{{ url_for('delete_entry', entry_id=entry.id) }}" onsubmit="return confirm('Удалить эту операцию?')"><button class="delete" title="Удалить">×</button></form></td>
+        </tr>{% endfor %}</tbody>
+      </table></div>{% else %}<div class="empty"><div>Br</div><h3>Операций пока нет</h3><p>Добавьте первую запись слева. Итог пересчитается автоматически.</p></div>{% endif %}
+    </section>
+  </div>
+</main>
+<footer>Данные хранятся локально · Курсы USD: официальный API НБРБ · Сводный баланс v1.1</footer>
+<script>
+  const kind=document.getElementById('kind'),sign=document.getElementById('sign'),currency=document.getElementById('currency'),rate=document.getElementById('rate-label'),hint=document.getElementById('operation-hint');
+  function updateKind(){const option=kind.selectedOptions[0];sign.value=option.dataset.sign;if(option.dataset.mode==='deposit_add')hint.innerHTML='<b>Займ:</b> сумма зачислится на отдельный депозит выбранного собственника и не изменит взаимный долг.';else if(option.dataset.mode==='deposit_use')hint.innerHTML='<b>Использование займа:</b> сумма уменьшит депозит выбранного собственника и не изменит взаимный долг.';else hint.innerHTML='<b>Правило:</b> «+» увеличивает задолженность выбранного собственника перед вторым, «−» уменьшает её.'}
+  function updateCurrency(){rate.style.display=currency.value==='USD'?'block':'none'}
+  kind.addEventListener('change',updateKind);currency.addEventListener('change',updateCurrency);updateKind();updateCurrency();
+</script>
+</body></html>
