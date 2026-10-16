@@ -7,4 +7,5 @@ build/
 dist/
 *.spec
 *.db
+balance-config.json
 *.csv

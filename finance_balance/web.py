@@ -5,16 +5,49 @@ import tempfile
 from datetime import date
 from pathlib import Path
 
-from flask import Flask, flash, redirect, render_template, request, send_file, url_for
+from flask import Flask, flash, redirect, render_template, request, send_file, session, url_for
 
 from .core import CURRENCIES, KINDS, OWNERS, Ledger, format_money
+from .security import SecurityConfig
 
 
-def create_app(db_path: str | Path | None = None) -> Flask:
+def create_app(db_path: str | Path | None = None, security: SecurityConfig | None = None) -> Flask:
     app = Flask(__name__)
-    app.config["SECRET_KEY"] = os.environ.get("BALANCE_SECRET", "local-balance-app")
+    app.config["SECRET_KEY"] = os.environ.get("BALANCE_SECRET", security.session_secret if security else "local-balance-app")
     app.config["LEDGER"] = Ledger(db_path)
+    app.config["SECURITY"] = security
     app.jinja_env.filters["money"] = format_money
+
+    @app.before_request
+    def require_password():
+        access: SecurityConfig | None = app.config["SECURITY"]
+        if not access or not access.configured:
+            return None
+        if request.endpoint in {"login", "static", "health"}:
+            return None
+        if not session.get("authenticated"):
+            return redirect(url_for("login", next=request.path))
+        return None
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        access: SecurityConfig | None = app.config["SECURITY"]
+        if not access or not access.configured:
+            return redirect(url_for("index"))
+        error = None
+        if request.method == "POST":
+            if access.verify(request.form.get("password", "")):
+                session.clear()
+                session["authenticated"] = True
+                destination = request.args.get("next", "")
+                return redirect(destination if destination.startswith("/") else url_for("index"))
+            error = "Неверный пароль"
+        return render_template("login.html", error=error)
+
+    @app.post("/logout")
+    def logout():
+        session.clear()
+        return redirect(url_for("login"))
 
     @app.get("/")
     def index():
@@ -26,6 +59,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             kinds=KINDS,
             owners=OWNERS,
             currencies=CURRENCIES,
+            protected=security is not None and security.configured,
             today=date.today().isoformat(),
         )
 
@@ -77,4 +111,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
 
 def run_web(db_path: str | Path | None = None, host: str = "127.0.0.1", port: int = 8080) -> None:
-    create_app(db_path).run(host=host, port=port, debug=False)
+    security = SecurityConfig()
+    if not security.configured:
+        raise SystemExit("Сначала запустите GUI и создайте пароль при первом запуске.")
+    create_app(db_path or security.database_path, security).run(host=host, port=port, debug=False)

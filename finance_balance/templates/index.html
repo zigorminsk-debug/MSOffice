@@ -7,7 +7,7 @@
 <body>
 <header class="topbar">
   <div class="brand"><span class="brand-mark">Б</span><div><strong>Сводный баланс</strong><small>Игорь · Юра</small></div></div>
-  <div class="header-actions"><a class="button secondary" href="{{ url_for('help_page') }}">? Инструкция</a><a class="button secondary" href="{{ url_for('export_csv') }}">↓ Экспорт CSV</a></div>
+  <div class="header-actions"><a class="button secondary" href="{{ url_for('help_page') }}">? Инструкция</a><a class="button secondary" href="{{ url_for('export_csv') }}">↓ Экспорт CSV</a>{% if protected %}<form method="post" action="{{ url_for('logout') }}"><button class="button secondary" type="submit">Выйти</button></form>{% endif %}</div>
 </header>
 <main>
   {% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}

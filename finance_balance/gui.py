@@ -1,21 +1,31 @@
 from __future__ import annotations
 
+import socket
+import sqlite3
 import threading
 import webbrowser
 from datetime import date
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from .core import KINDS, Ledger, format_money
 from .help_content import HELP_TEXT
+from .security import SecurityConfig
 from .web import create_app
 
 
 class BalanceGUI(tk.Tk):
     def __init__(self, db_path: str | Path | None = None):
         super().__init__()
-        self.ledger = Ledger(db_path)
+        self.withdraw()
+        self.security = SecurityConfig()
+        self.authorized = self._authenticate()
+        if not self.authorized:
+            self.destroy()
+            return
+        selected_db = db_path or self.security.database_path
+        self.ledger = Ledger(selected_db)
         self.title("Сводный баланс — Игорь и Юра")
         self.geometry("1280x800")
         self.minsize(980, 650)
@@ -24,6 +34,39 @@ class BalanceGUI(tk.Tk):
         self._configure_styles()
         self._build()
         self.refresh()
+        self.deiconify()
+
+    def _authenticate(self) -> bool:
+        if not self.security.configured:
+            messagebox.showinfo("Первый запуск", "Создайте пароль для запуска приложения. Минимум 6 символов.\n\nПароль нельзя восстановить автоматически — сохраните его в надёжном месте.", parent=self)
+            while True:
+                password = simpledialog.askstring("Создание пароля", "Новый пароль:", show="*", parent=self)
+                if password is None:
+                    return False
+                confirmation = simpledialog.askstring("Создание пароля", "Повторите пароль:", show="*", parent=self)
+                if password != confirmation:
+                    messagebox.showerror("Пароль", "Пароли не совпадают", parent=self)
+                    continue
+                try:
+                    self.security.set_password(password)
+                    self.security.set_database(self.security.database_path)
+                    break
+                except ValueError as error:
+                    messagebox.showerror("Пароль", str(error), parent=self)
+            if messagebox.askyesno("Сетевая база", "Использовать существующий файл balance.db из общей сетевой папки?", parent=self):
+                selected = filedialog.askopenfilename(parent=self, title="Выберите сетевую базу", filetypes=[("База SQLite", "*.db"), ("Все файлы", "*.*")])
+                if selected:
+                    self.security.set_database(selected)
+            return True
+        for _ in range(5):
+            password = simpledialog.askstring("Вход", "Введите пароль для запуска:", show="*", parent=self)
+            if password is None:
+                return False
+            if self.security.verify(password):
+                return True
+            messagebox.showerror("Вход", "Неверный пароль", parent=self)
+        messagebox.showerror("Вход", "Слишком много неверных попыток", parent=self)
+        return False
 
     def _configure_styles(self) -> None:
         style = ttk.Style(self)
@@ -44,6 +87,7 @@ class BalanceGUI(tk.Tk):
         self.debt_title = tk.Label(left, bg="#16221d", fg="white", font=("Segoe UI", 12)); self.debt_title.pack(anchor="w")
         self.debt_value = tk.Label(left, bg="#16221d", fg="white", font=("Segoe UI", 24, "bold")); self.debt_value.pack(anchor="w")
         actions = tk.Frame(header, bg="#16221d"); actions.pack(side="right", padx=28)
+        ttk.Button(actions, text="База и доступ", command=self.configure_access).pack(side="left", padx=5)
         ttk.Button(actions, text="Инструкция", command=self.show_help).pack(side="left", padx=5)
         ttk.Button(actions, text="HTML-интерфейс", command=self.open_web).pack(side="left", padx=5)
         ttk.Button(actions, text="Экспорт CSV", command=self.export).pack(side="left", padx=5)
@@ -140,6 +184,55 @@ class BalanceGUI(tk.Tk):
         target = filedialog.asksaveasfilename(parent=self, defaultextension=".csv", filetypes=[("CSV", "*.csv")], initialfile=f"balance-{date.today().isoformat()}.csv")
         if target: self.ledger.export_csv(target); messagebox.showinfo("Экспорт", "Файл успешно сохранён", parent=self)
 
+    def configure_access(self) -> None:
+        window = tk.Toplevel(self)
+        window.title("База данных и сетевой доступ")
+        window.geometry("700x390")
+        window.resizable(False, False)
+        window.configure(bg="#fff")
+        path_var = tk.StringVar(value=str(self.ledger.db_path))
+        network_var = tk.BooleanVar(value=self.security.network_access)
+        password_var = tk.StringVar()
+        confirm_var = tk.StringVar()
+        tk.Label(window, text="База данных и доступ", bg="#16221d", fg="white", font=("Segoe UI", 16, "bold"), padx=22, pady=16).pack(fill="x")
+        body = tk.Frame(window, bg="#fff", padx=24, pady=18); body.pack(fill="both", expand=True)
+        tk.Label(body, text="Путь к balance.db (можно указать сетевой путь, например \\\\SERVER\\Share\\balance.db)", bg="#fff", fg="#45534b", font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        path_entry = ttk.Entry(body, textvariable=path_var); path_entry.pack(fill="x", pady=(5, 7))
+        buttons = tk.Frame(body, bg="#fff"); buttons.pack(fill="x")
+        def open_existing():
+            selected = filedialog.askopenfilename(parent=window, title="Открыть базу", filetypes=[("База SQLite", "*.db"), ("Все файлы", "*.*")])
+            if selected: path_var.set(selected)
+        def create_new():
+            selected = filedialog.asksaveasfilename(parent=window, title="Создать базу", defaultextension=".db", filetypes=[("База SQLite", "*.db")], initialfile="balance.db")
+            if selected: path_var.set(selected)
+        ttk.Button(buttons, text="Открыть существующую…", command=open_existing).pack(side="left", padx=(0, 6))
+        ttk.Button(buttons, text="Создать новую…", command=create_new).pack(side="left")
+        ttk.Checkbutton(body, text="Разрешить доступ к HTML-интерфейсу из локальной сети", variable=network_var).pack(anchor="w", pady=(18, 12))
+        tk.Label(body, text="Новый пароль (оставьте пустым, чтобы не менять)", bg="#fff", fg="#45534b", font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        password_row = tk.Frame(body, bg="#fff"); password_row.pack(fill="x", pady=5)
+        ttk.Entry(password_row, textvariable=password_var, show="*").pack(side="left", fill="x", expand=True, padx=(0, 6))
+        ttk.Entry(password_row, textvariable=confirm_var, show="*").pack(side="left", fill="x", expand=True)
+        tk.Label(body, text="Новый пароль                                      Повторите пароль", bg="#fff", fg="#7b8780", font=("Segoe UI", 8)).pack(anchor="w")
+        def save_settings():
+            if password_var.get() or confirm_var.get():
+                if password_var.get() != confirm_var.get():
+                    messagebox.showerror("Настройки", "Новые пароли не совпадают", parent=window); return
+                try: self.security.set_password(password_var.get())
+                except ValueError as error:
+                    messagebox.showerror("Настройки", str(error), parent=window); return
+            try:
+                new_ledger = Ledger(path_var.get())
+            except (OSError, sqlite3.Error) as error:
+                messagebox.showerror("Настройки", f"Не удалось открыть базу:\n{error}", parent=window); return
+            self.security.set_database(path_var.get())
+            self.security.set_network_access(network_var.get())
+            self.ledger = new_ledger
+            self.refresh()
+            window.destroy()
+            messagebox.showinfo("Настройки", "Настройки сохранены. Если HTML-интерфейс уже был запущен, перезапустите приложение.", parent=self)
+        ttk.Button(body, text="Сохранить настройки", command=save_settings).pack(anchor="e", pady=(16, 0))
+        window.transient(self); window.grab_set(); window.focus_set()
+
     def show_help(self) -> None:
         window = tk.Toplevel(self)
         window.title("Инструкция — Сводный баланс")
@@ -166,11 +259,23 @@ class BalanceGUI(tk.Tk):
 
     def open_web(self) -> None:
         if not self.web_started:
-            app = create_app(self.ledger.db_path)
-            threading.Thread(target=lambda: app.run(host="127.0.0.1", port=8080, debug=False, use_reloader=False), daemon=True).start()
+            app = create_app(self.ledger.db_path, self.security)
+            host = "0.0.0.0" if self.security.network_access else "127.0.0.1"
+            threading.Thread(target=lambda: app.run(host=host, port=8080, debug=False, use_reloader=False), daemon=True).start()
             self.web_started = True
+            if self.security.network_access:
+                try:
+                    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    probe.connect(("8.8.8.8", 80))
+                    local_ip = probe.getsockname()[0]
+                    probe.close()
+                except OSError:
+                    local_ip = socket.gethostbyname(socket.gethostname())
+                messagebox.showinfo("Сетевой доступ", f"На других компьютерах локальной сети откройте:\n\nhttp://{local_ip}:8080\n\nДля входа используется пароль приложения.", parent=self)
         webbrowser.open("http://127.0.0.1:8080")
 
 
 def run_gui(db_path: str | Path | None = None) -> None:
-    BalanceGUI(db_path).mainloop()
+    app = BalanceGUI(db_path)
+    if app.authorized:
+        app.mainloop()

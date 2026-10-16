@@ -158,8 +158,9 @@ class Ledger:
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.db_path)
+        connection = sqlite3.connect(self.db_path, timeout=15)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 15000")
         try:
             yield connection
             connection.commit()
