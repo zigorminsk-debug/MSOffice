@@ -65,8 +65,8 @@ class BalanceGUI(tk.Tk):
                     break
                 except ValueError as error:
                     messagebox.showerror("Пароль", str(error), parent=self)
-            if messagebox.askyesno("Сетевая база", "Использовать существующую базу Fitnes из общей сетевой папки?", parent=self):
-                selected = filedialog.askopenfilename(parent=self, title="Выберите сетевую базу", filetypes=[("База SQLite", "*.db"), ("Все файлы", "*.*")])
+            if messagebox.askyesno("Существующая база", "Подключить существующую базу от старой версии Fitnes или из сетевой папки?", parent=self):
+                selected = filedialog.askopenfilename(parent=self, title="Выберите существующую базу Fitnes", filetypes=[("База SQLite", "*.db"), ("Все файлы", "*.*")])
                 if selected:
                     self.security.set_database(selected)
             return True

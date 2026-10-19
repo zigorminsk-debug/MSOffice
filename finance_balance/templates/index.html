@@ -77,7 +77,7 @@
     </section>
   </div>
 </main>
-<footer>Данные хранятся локально · Курсы USD: официальный API НБРБ · Fitnes v2.0</footer>
+<footer>Данные хранятся локально · Курсы USD: официальный API НБРБ · Fitnes v2.1</footer>
 <script>
   const kind=document.getElementById('kind'),sign=document.getElementById('sign'),currency=document.getElementById('currency'),rate=document.getElementById('rate-label'),reference=document.getElementById('reference-label'),hint=document.getElementById('operation-hint');
   function updateKind(){const option=kind.selectedOptions[0];sign.value=option.dataset.sign;if(option.dataset.mode==='deposit_add')hint.innerHTML='<b>Займ:</b> сумма зачислится на депозит. При валютном размещении укажите курс внесения в пояснении или при снятии.';else if(option.dataset.mode==='deposit_use')hint.innerHTML='<b>Курсовая разница:</b> введите исходную сумму в BYN, курс внесения и курс получения. Например: 30 000; 3,2; 2,7 → получено 25 312,50, потеря 4 687,50, депозит закрыт полностью.';else hint.innerHTML='<b>Правило:</b> «+» увеличивает задолженность выбранного собственника перед вторым, «−» уменьшает её.';updateCurrency()}
