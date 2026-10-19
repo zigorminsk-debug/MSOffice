@@ -137,6 +137,7 @@ class BalanceGUI(tk.Tk):
         ttk.Button(actions, text="Базы и пароли", command=self.configure_access).pack(side="left", padx=5)
         ttk.Button(actions, text="Инструкция", command=self.show_help).pack(side="left", padx=5)
         ttk.Button(actions, text="HTML-интерфейс", command=self.open_web).pack(side="left", padx=5)
+        ttk.Button(actions, text="Импорт CSV", command=self.import_csv).pack(side="left", padx=5)
         ttk.Button(actions, text="Экспорт CSV", command=self.export).pack(side="left", padx=5)
 
         form = tk.LabelFrame(self, text="  Новая операция  ", bg="#fff", fg="#16221d", font=("Segoe UI", 10, "bold"), padx=14, pady=10)
@@ -227,6 +228,28 @@ class BalanceGUI(tk.Tk):
         if not selected: messagebox.showinfo("Удаление", "Выберите запись в таблице", parent=self); return
         if messagebox.askyesno("Удаление", "Удалить выбранную операцию?", parent=self):
             self.ledger.delete(int(selected[0])); self.refresh()
+
+    def import_csv(self) -> None:
+        source = filedialog.askopenfilename(
+            parent=self, title="Импорт CSV в Fitnes",
+            filetypes=[("CSV", "*.csv"), ("Текстовые файлы", "*.txt"), ("Все файлы", "*.*")],
+        )
+        if not source:
+            return
+        database_name = self.security.database_name(self.ledger.db_path)
+        if not messagebox.askyesno(
+            "Импорт CSV",
+            f"Импортировать операции в базу «{database_name}»?\n\nВсе строки сначала будут проверены. Повторный импорт того же файла создаст дубликаты.",
+            parent=self,
+        ):
+            return
+        try:
+            count = self.ledger.import_csv(source)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Импорт CSV", str(error), parent=self)
+            return
+        self.refresh()
+        messagebox.showinfo("Импорт CSV", f"Успешно импортировано операций: {count}", parent=self)
 
     def export(self) -> None:
         target = filedialog.asksaveasfilename(parent=self, defaultextension=".csv", filetypes=[("CSV", "*.csv")], initialfile=f"fitnes-{date.today().isoformat()}.csv")

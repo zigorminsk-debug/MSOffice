@@ -1,3 +1,5 @@
+import io
+
 from finance_balance.web import create_app
 
 
@@ -16,6 +18,11 @@ def test_web_add_and_export(tmp_path):
     help_page = client.get("/help")
     assert help_page.status_code == 200
     assert "Примеры обычных операций".encode("utf-8") in help_page.data
+    imported = client.post("/import.csv", data={
+        "csv_file": (io.BytesIO("Дата;Операция;Баланс;Знак;Сумма;Валюта\n2026-02-01;Штраф;Игорь;+;50;BYN\n".encode("utf-8")), "import.csv")
+    }, content_type="multipart/form-data", follow_redirects=True)
+    assert imported.status_code == 200
+    assert "Импортировано операций: 1".encode("utf-8") in imported.data
     exported = client.get("/export.csv")
     assert exported.status_code == 200
     assert "attachment" in exported.headers["Content-Disposition"]

@@ -42,6 +42,36 @@ def test_usd_conversion_and_loan_deposits(tmp_path):
     assert usd.byn_cents == 32_500
 
 
+def test_csv_export_import_roundtrip(tmp_path):
+    source = Ledger(tmp_path / "source.db")
+    source.add(operation_date="2026-04-01", kind="purchase", amount="125,50", sign=1,
+               owner="Юра", currency="BYN", from_party="Компания", to_party="Магазин",
+               description="Тестовая покупка")
+    source.add(operation_date="2026-04-02", kind="repayment_cash", amount="25", sign=-1,
+               owner="Юра", currency="USD", fx_rate="3.2", from_party="Юра", to_party="Игорь")
+    exported = source.export_csv(tmp_path / "fitnes.csv")
+
+    destination = Ledger(tmp_path / "destination.db")
+    assert destination.import_csv(exported) == 2
+    entries = destination.list()
+    assert len(entries) == 2
+    assert entries[0].currency == "USD"
+    assert entries[0].fx_rate == "3.2"
+    assert entries[1].description == "Тестовая покупка"
+    assert destination.summary() == source.summary()
+
+
+def test_csv_import_is_atomic_on_error(tmp_path):
+    ledger = Ledger(tmp_path / "test.db")
+    csv_data = "Дата;Операция;Баланс;Знак;Сумма;Валюта\n2026-01-01;Кредит;Юра;+;100;BYN\n2026-01-02;Неизвестно;Юра;+;50;BYN\n"
+    try:
+        ledger.import_csv_bytes(csv_data.encode("utf-8"))
+        assert False, "Ожидалась ошибка импорта"
+    except ValueError as error:
+        assert "строка 3" in str(error)
+    assert ledger.list() == []
+
+
 def test_delete(tmp_path):
     ledger = Ledger(tmp_path / "test.db")
     entry_id = ledger.add(operation_date="2026-01-01", kind="fine", amount="500", sign=1, owner="Юра")

@@ -7,7 +7,7 @@
 <body>
 <header class="topbar">
   <div class="brand"><span class="brand-mark">F</span><div><strong>Fitnes</strong><small>{{ active_database }} · Игорь · Юра</small></div></div>
-  <div class="header-actions"><a class="button secondary" href="{{ url_for('help_page') }}">? Инструкция</a><a class="button secondary" href="{{ url_for('export_csv') }}">↓ Экспорт CSV</a>{% if protected %}<form method="post" action="{{ url_for('logout') }}"><button class="button secondary" type="submit">Выйти</button></form>{% endif %}</div>
+  <div class="header-actions"><a class="button secondary" href="{{ url_for('help_page') }}">? Инструкция</a><form method="post" action="{{ url_for('import_csv') }}" enctype="multipart/form-data"><label class="button secondary import-button">↑ Импорт CSV<input type="file" name="csv_file" accept=".csv,text/csv" hidden onchange="if(confirm('Импортировать операции? Повторный импорт создаст дубликаты.')) this.form.submit(); else this.value='' "></label></form><a class="button secondary" href="{{ url_for('export_csv') }}">↓ Экспорт CSV</a>{% if protected %}<form method="post" action="{{ url_for('logout') }}"><button class="button secondary" type="submit">Выйти</button></form>{% endif %}</div>
 </header>
 <main>
   {% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}

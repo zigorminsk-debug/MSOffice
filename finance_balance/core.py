@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import sqlite3
 import sys
@@ -8,7 +9,7 @@ import urllib.parse
 import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Iterator
@@ -271,6 +272,108 @@ class Ledger:
             "igor_deposit": sum(item.deposit_effect_cents for item in entries if item.owner == "Игорь"),
             "yura_deposit": sum(item.deposit_effect_cents for item in entries if item.owner == "Юра"),
         }
+
+    def import_csv(self, source: str | Path) -> int:
+        raw = Path(source).read_bytes()
+        return self.import_csv_bytes(raw)
+
+    def import_csv_bytes(self, raw: bytes) -> int:
+        """Импортирует CSV целиком или не добавляет ни одной строки при ошибке."""
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            try:
+                text = raw.decode("cp1251")
+            except UnicodeDecodeError as exc:
+                raise ValueError("CSV должен быть в кодировке UTF-8 или Windows-1251") from exc
+        if not text.strip():
+            raise ValueError("CSV-файл пуст")
+        sample = text[:8192]
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=";,\t,")
+            delimiter = dialect.delimiter
+        except csv.Error:
+            delimiter = ";"
+        reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
+        if not reader.fieldnames:
+            raise ValueError("В CSV отсутствует строка заголовков")
+
+        def normalized(value: str) -> str:
+            return value.strip().lower().replace("ё", "е")
+
+        headers = {normalized(name): name for name in reader.fieldnames if name}
+
+        def value(row: dict, *aliases: str, required: bool = False) -> str:
+            for alias in aliases:
+                original = headers.get(normalized(alias))
+                if original is not None:
+                    result = (row.get(original) or "").strip()
+                    if result or not required:
+                        return result
+            if required:
+                raise ValueError(f"отсутствует обязательное поле «{aliases[0]}»")
+            return ""
+
+        kind_by_label = {normalized(item[0]): code for code, item in KINDS.items()}
+        prepared: list[tuple] = []
+        errors: list[str] = []
+        for line_number, row in enumerate(reader, start=2):
+            if not any((cell or "").strip() for cell in row.values()):
+                continue
+            try:
+                raw_date = value(row, "Дата", "Date", required=True)
+                try:
+                    operation_date = date.fromisoformat(raw_date).isoformat()
+                except ValueError:
+                    operation_date = datetime.strptime(raw_date, "%d.%m.%Y").date().isoformat()
+                raw_kind = value(row, "Операция", "Вид операции", "Kind", required=True)
+                kind = raw_kind if raw_kind in KINDS else kind_by_label.get(normalized(raw_kind), "")
+                if not kind:
+                    raise ValueError(f"неизвестная операция «{raw_kind}»")
+                owner = value(row, "Баланс", "На чей баланс", "Владелец", "Owner", required=True).capitalize()
+                if owner not in OWNERS:
+                    raise ValueError("баланс должен быть «Игорь» или «Юра»")
+                raw_sign = value(row, "Знак", "Действие", "Sign", required=True).replace("−", "-")
+                if raw_sign.strip().lower() in {"+", "+1", "1", "плюс"}:
+                    sign = 1
+                elif raw_sign.strip().lower() in {"-", "-1", "минус"}:
+                    sign = -1
+                else:
+                    raise ValueError("знак должен быть + или −")
+                amount_cents = money_to_cents(value(row, "Сумма", "Amount", required=True))
+                currency = (value(row, "Валюта", "Currency") or "BYN").upper()
+                if currency not in CURRENCIES:
+                    raise ValueError("валюта должна быть BYN или USD")
+                raw_rate = value(row, "Курс НБРБ", "Курс", "Rate")
+                if currency == "USD":
+                    rate = decimal_value(raw_rate) if raw_rate else self.rate_provider.get_usd_rate(operation_date)
+                else:
+                    rate = Decimal("1")
+                byn_cents = int((Decimal(amount_cents) * rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+                prepared.append((
+                    operation_date, kind, amount_cents, sign,
+                    value(row, "От кого", "From"), value(row, "Кому", "To"),
+                    value(row, "Пояснение", "Описание", "Description"), owner, currency,
+                    str(rate), byn_cents,
+                ))
+            except (ValueError, InvalidOperation) as error:
+                errors.append(f"строка {line_number}: {error}")
+        if errors:
+            details = "; ".join(errors[:5])
+            if len(errors) > 5:
+                details += f"; и ещё {len(errors) - 5}"
+            raise ValueError(f"Импорт отменён: {details}")
+        if not prepared:
+            raise ValueError("В CSV нет операций для импорта")
+        with self.connect() as db:
+            db.executemany(
+                """INSERT INTO entries
+                (operation_date, kind, amount_cents, sign, from_party, to_party, description,
+                 owner, currency, fx_rate, amount_byn_cents)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                prepared,
+            )
+        return len(prepared)
 
     def export_csv(self, destination: str | Path) -> Path:
         target = Path(destination)

@@ -21,6 +21,7 @@ def create_app(
     app.config["LEDGER"] = Ledger(db_path)
     app.config["SECURITY"] = security
     app.config["DATABASE_SECURITY"] = database_security
+    app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
     app.jinja_env.filters["money"] = format_money
 
     @app.before_request
@@ -98,6 +99,20 @@ def create_app(
         ledger: Ledger = app.config["LEDGER"]
         if ledger.delete(entry_id):
             flash("Операция удалена", "success")
+        return redirect(url_for("index"))
+
+    @app.post("/import.csv")
+    def import_csv():
+        ledger: Ledger = app.config["LEDGER"]
+        uploaded = request.files.get("csv_file")
+        if not uploaded or not uploaded.filename:
+            flash("Выберите CSV-файл", "error")
+            return redirect(url_for("index"))
+        try:
+            count = ledger.import_csv_bytes(uploaded.read())
+            flash(f"Импортировано операций: {count}", "success")
+        except ValueError as error:
+            flash(str(error), "error")
         return redirect(url_for("index"))
 
     @app.get("/export.csv")
