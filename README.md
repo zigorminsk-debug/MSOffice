@@ -121,4 +121,19 @@ pip install -r requirements-dev.txt
 pytest -v
 ```
 
-GitHub Actions автоматически запускает тесты на Python 3.11/3.13 и собирает автономный Windows-файл `Fitnes.exe` с фирменным значком. Готовый файл находится в артефакте **Fitnes-Windows** соответствующего запуска workflow **Test and build**.
+GitHub Actions автоматически запускает тесты на Python 3.11/3.13 и собирает переносимую Windows-версию с фирменным значком. Она публикуется как ZIP-артефакт **Fitnes-Windows-Portable** workflow **Test and build**. Распакуйте архив целиком и запускайте `Fitnes.exe` внутри папки — служебную папку `_internal` удалять нельзя.
+
+## Предупреждение Chrome и Windows
+
+Fitnes собирается открыто на GitHub Actions, но пока не подписан платным сертификатом Microsoft Authenticode. Поэтому Chrome, SmartScreen или антивирус могут помечать редко скачиваемую новую программу как неизвестную. Это не означает, что в файле найден вирус.
+
+Чтобы уменьшить ложные срабатывания, Fitnes распространяется как **portable-папка**, а не как самораспаковывающийся one-file EXE. В сборку также включён `SHA256SUMS.txt`: вычисленный SHA-256 файла `Fitnes.exe` должен совпадать с указанным значением.
+
+Проверка в PowerShell из распакованной папки:
+
+```powershell
+(Get-FileHash .\Fitnes.exe -Algorithm SHA256).Hash.ToLower()
+Get-Content .\SHA256SUMS.txt
+```
+
+Полностью убрать предупреждение SmartScreen без доверенного сертификата издателя невозможно.
