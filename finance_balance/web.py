@@ -65,6 +65,7 @@ def create_app(
             "index.html",
             entries=ledger.list(),
             summary=ledger.summary(),
+            deposits=ledger.deposit_balances(),
             kinds=KINDS,
             owners=OWNERS,
             currencies=CURRENCIES,
@@ -86,6 +87,7 @@ def create_app(
                 currency=request.form.get("currency", "BYN"),
                 fx_rate=request.form.get("fx_rate", ""),
                 reference_rate=request.form.get("reference_rate", ""),
+                deposit_source=request.form.get("deposit_source", ""),
                 from_party=request.form.get("from_party", ""),
                 to_party=request.form.get("to_party", ""),
                 description=request.form.get("description", ""),
@@ -110,6 +112,7 @@ def create_app(
                     sign=request.form.get("sign", ""), owner=request.form.get("owner", ""),
                     currency=request.form.get("currency", "BYN"), fx_rate=request.form.get("fx_rate", ""),
                     reference_rate=request.form.get("reference_rate", ""),
+                    deposit_source=request.form.get("deposit_source", ""),
                     from_party=request.form.get("from_party", ""), to_party=request.form.get("to_party", ""),
                     description=request.form.get("description", ""),
                 )

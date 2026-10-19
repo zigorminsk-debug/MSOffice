@@ -89,6 +89,20 @@ def test_exchange_difference_closes_deposit_without_debt(tmp_path):
     assert summary["debt"] == 0
 
 
+def test_multiple_deposit_sources_only_show_nonzero(tmp_path):
+    ledger = Ledger(tmp_path / "deposits.db")
+    ledger.add(operation_date="2026-01-01", kind="loan_deposit", amount="1000", sign=1,
+               owner="Юра", deposit_source="Юра")
+    ledger.add(operation_date="2026-01-02", kind="loan_deposit", amount="2500", sign=1,
+               owner="Игорь", deposit_source="ООО Ромашка")
+    ledger.add(operation_date="2026-01-03", kind="loan_use", amount="1000", sign=-1,
+               owner="Юра", deposit_source="Юра")
+    assert ledger.deposit_balances() == [{"source": "ООО Ромашка", "balance": 250_000}]
+    entry = next(item for item in ledger.list() if item.kind == "loan_use")
+    assert entry.deposit_name == "Юра"
+    assert ledger.summary()["debt"] == 0
+
+
 def test_edit_entry_recalculates_balance(tmp_path):
     ledger = Ledger(tmp_path / "edit.db")
     entry_id = ledger.add(operation_date="2026-01-01", kind="fine", amount="500", sign=1, owner="Юра")

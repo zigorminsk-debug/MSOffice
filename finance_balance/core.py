@@ -29,8 +29,8 @@ KINDS = {
     "repayment_bank": ("Возврат долга — перечисление", "Возврат", -1, "debt"),
     "repayment_cash": ("Возврат долга — наличные", "Возврат", -1, "debt"),
     "personal_purchase": ("Личная покупка", "Личная покупка", 1, "debt"),
-    "loan_deposit": ("Выдан займ (зачислить на депозит)", "Займы", 1, "deposit_add"),
-    "loan_use": ("Перечислено из займа / снято", "Займы", -1, "deposit_use"),
+    "loan_deposit": ("Внесение на депозит", "Депозиты", 1, "deposit_add"),
+    "loan_use": ("Расход из депозита / снятие", "Депозиты", -1, "deposit_use"),
     "adjustment": ("Корректировка задолженности", "Корректировка", 1, "debt"),
 }
 
@@ -115,6 +115,7 @@ class Entry:
     amount_byn_cents: int = 0
     reference_rate: str = ""
     fx_difference_cents: int = 0
+    deposit_source: str = ""
     edited_at: str = ""
     edit_count: int = 0
 
@@ -132,6 +133,10 @@ class Entry:
     @property
     def mode(self) -> str:
         return KINDS.get(self.kind, ("", "", 0, "debt"))[3]
+
+    @property
+    def deposit_name(self) -> str:
+        return self.deposit_source.strip() or self.from_party.strip() or self.owner
 
     @property
     def effect_cents(self) -> int:
@@ -210,7 +215,8 @@ class Ledger:
                     fx_rate TEXT NOT NULL DEFAULT '1',
                     amount_byn_cents INTEGER NOT NULL DEFAULT 0,
                     reference_rate TEXT NOT NULL DEFAULT '',
-                    fx_difference_cents INTEGER NOT NULL DEFAULT 0
+                    fx_difference_cents INTEGER NOT NULL DEFAULT 0,
+                    deposit_source TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
@@ -222,6 +228,7 @@ class Ledger:
                 "amount_byn_cents": "ALTER TABLE entries ADD COLUMN amount_byn_cents INTEGER NOT NULL DEFAULT 0",
                 "reference_rate": "ALTER TABLE entries ADD COLUMN reference_rate TEXT NOT NULL DEFAULT ''",
                 "fx_difference_cents": "ALTER TABLE entries ADD COLUMN fx_difference_cents INTEGER NOT NULL DEFAULT 0",
+                "deposit_source": "ALTER TABLE entries ADD COLUMN deposit_source TEXT NOT NULL DEFAULT ''",
             }
             for column, sql in migrations.items():
                 if column not in existing:
@@ -242,7 +249,7 @@ class Ledger:
         self, *, operation_date: str, kind: str, amount: str | int | Decimal,
         sign: int | str, owner: str = "Юра", currency: str = "BYN",
         fx_rate: str | Decimal | None = None,
-        reference_rate: str | Decimal | None = None,
+        reference_rate: str | Decimal | None = None, deposit_source: str = "",
         from_party: str = "", to_party: str = "", description: str = "",
     ) -> tuple:
         if kind not in KINDS:
@@ -283,10 +290,13 @@ class Ledger:
             else:
                 rate = Decimal("1")
             byn_cents = int((Decimal(cents) * rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        source = deposit_source.strip()
+        if KINDS[kind][3] in {"deposit_add", "deposit_use"} and not source:
+            source = from_party.strip() or owner
         return (
             operation_date, kind, cents, sign_int, from_party.strip(), to_party.strip(),
             description.strip(), owner, currency, str(rate), byn_cents,
-            str(reference) if reference is not None else "", fx_difference,
+            str(reference) if reference is not None else "", fx_difference, source,
         )
 
     def add(self, **values) -> int:
@@ -295,8 +305,8 @@ class Ledger:
             cursor = db.execute(
                 """INSERT INTO entries
                 (operation_date, kind, amount_cents, sign, from_party, to_party, description,
-                 owner, currency, fx_rate, amount_byn_cents, reference_rate, fx_difference_cents)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 owner, currency, fx_rate, amount_byn_cents, reference_rate, fx_difference_cents, deposit_source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 prepared,
             )
             return int(cursor.lastrowid)
@@ -307,7 +317,7 @@ class Ledger:
             result = db.execute(
                 """UPDATE entries SET operation_date=?, kind=?, amount_cents=?, sign=?,
                 from_party=?, to_party=?, description=?, owner=?, currency=?, fx_rate=?,
-                amount_byn_cents=?, reference_rate=?, fx_difference_cents=? WHERE id=?""",
+                amount_byn_cents=?, reference_rate=?, fx_difference_cents=?, deposit_source=? WHERE id=?""",
                 (*prepared, entry_id),
             )
             if result.rowcount:
@@ -336,6 +346,17 @@ class Ledger:
         with self.connect() as db:
             rows = db.execute(self._entry_select() + " ORDER BY e.operation_date DESC, e.id DESC").fetchall()
         return [Entry(**dict(row)) for row in rows]
+
+    def deposit_balances(self) -> list[dict[str, int | str]]:
+        balances: dict[str, int] = {}
+        for item in self.list():
+            if item.mode in {"deposit_add", "deposit_use"}:
+                balances[item.deposit_name] = balances.get(item.deposit_name, 0) + item.deposit_effect_cents
+        return [
+            {"source": source, "balance": balance}
+            for source, balance in sorted(balances.items(), key=lambda pair: pair[0].casefold())
+            if balance != 0
+        ]
 
     def summary(self) -> dict[str, int]:
         entries = self.list()
@@ -426,6 +447,7 @@ class Ledger:
                     owner=owner, currency=(value(row, "Валюта", "Currency") or "BYN").upper(),
                     fx_rate=value(row, "Курс получения", "Курс НБРБ", "Курс", "Rate"),
                     reference_rate=value(row, "Курс внесения", "Исходный курс", "Reference rate"),
+                    deposit_source=value(row, "Источник депозита", "Депозит от", "Deposit source"),
                     from_party=value(row, "От кого", "From"), to_party=value(row, "Кому", "To"),
                     description=value(row, "Пояснение", "Описание", "Description"),
                 ))
@@ -442,8 +464,8 @@ class Ledger:
             db.executemany(
                 """INSERT INTO entries
                 (operation_date, kind, amount_cents, sign, from_party, to_party, description,
-                 owner, currency, fx_rate, amount_byn_cents, reference_rate, fx_difference_cents)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 owner, currency, fx_rate, amount_byn_cents, reference_rate, fx_difference_cents, deposit_source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 prepared,
             )
         return len(prepared)
@@ -454,7 +476,7 @@ class Ledger:
             writer = csv.writer(stream, delimiter=";")
             writer.writerow(["Дата", "Раздел", "Операция", "Баланс", "Знак", "Сумма", "Валюта",
                              "Курс внесения", "Курс получения", "Получено BYN", "Курсовая разница",
-                             "От кого", "Кому", "Пояснение", "Примечание редактирования",
+                             "Источник депозита", "От кого", "Кому", "Пояснение", "Примечание редактирования",
                              "Изменение взаимного долга", "Изменение депозита займа"])
             for item in reversed(self.list()):
                 writer.writerow([
@@ -463,7 +485,7 @@ class Ledger:
                     item.currency, item.reference_rate, item.fx_rate,
                     f"{Decimal(item.byn_cents) / 100:.2f}",
                     f"{Decimal(item.fx_difference_cents) / 100:.2f}",
-                    item.from_party, item.to_party, item.description, item.edit_note,
+                    item.deposit_source, item.from_party, item.to_party, item.description, item.edit_note,
                     f"{Decimal(item.effect_cents) / 100:.2f}",
                     f"{Decimal(item.deposit_effect_cents) / 100:.2f}",
                 ])

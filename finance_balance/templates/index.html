@@ -23,6 +23,7 @@
       <div><span>Юра · сальдо</span><strong class="negative">{{ summary.yura|money }}</strong><small>«−» означает задолженность</small></div>
     </div>
   </section>
+  {% if deposits %}<section class="deposit-overview"><span>АКТИВНЫЕ ДЕПОЗИТЫ</span><div>{% for deposit in deposits %}<article><small>На депозите от</small><strong>{{ deposit.source }}</strong><b>{{ deposit.balance|money }}</b></article>{% endfor %}</div></section>{% endif %}
   <section class="stats loan-stats">
     <article><span>Приход</span><strong>{{ summary.incoming|money }}</strong></article>
     <article><span>Расходы</span><strong>{{ summary.expenses|money }}</strong></article>
@@ -51,6 +52,7 @@
           <label id="rate-label">Курс получения / USD<input type="text" inputmode="decimal" name="fx_rate" placeholder="Например, 2,7"><small class="field-help">Для USD без курсовой разницы можно оставить пустым: загрузится НБРБ.</small></label>
         </div>
         <label id="reference-label">Курс внесения на валютный депозит<input type="text" inputmode="decimal" name="reference_rate" placeholder="Например, 3,2"><small class="field-help">Заполните оба курса для автоматического расчёта курсовой разницы.</small></label>
+        <label id="deposit-source-label">Источник депозита / от кого получены деньги<input type="text" name="deposit_source" placeholder="Юра, Игорь, ООО «Компания»…"><small class="field-help">В расходе укажите точно такое же название, как при внесении.</small></label>
         <div class="amount-row">
           <label>От кого<input type="text" name="from_party" placeholder="Банк, Юра, компания…"></label>
           <label>Кому<input type="text" name="to_party" placeholder="Игорь, магазин…"></label>
@@ -66,7 +68,7 @@
       {% if entries %}<div class="table-wrap"><table>
         <thead><tr><th>Дата / операция</th><th>Баланс / направление</th><th>Исходная сумма</th><th>Сумма BYN</th><th>Влияние</th><th></th></tr></thead>
         <tbody>{% for entry in entries %}<tr>
-          <td><strong>{{ entry.kind_label }}</strong><small>{{ entry.operation_date }} · {{ entry.section }}</small>{% if entry.description %}<em>{{ entry.description }}</em>{% endif %}{% if entry.edit_note %}<em class="audit-note">{{ entry.edit_note }}</em>{% endif %}</td>
+          <td><strong>{{ entry.kind_label }}</strong><small>{{ entry.operation_date }} · {{ entry.section }}{% if entry.mode != 'debt' %} · депозит от {{ entry.deposit_name }}{% endif %}</small>{% if entry.description %}<em>{{ entry.description }}</em>{% endif %}{% if entry.edit_note %}<em class="audit-note">{{ entry.edit_note }}</em>{% endif %}</td>
           <td><strong>{{ entry.owner }}</strong><small>{{ entry.from_party or '—' }} → {{ entry.to_party or '—' }}</small></td>
           <td class="calc-amount" data-calc-byn="{{ entry.calculator_byn_cents }}" title="Ctrl+клик: добавить в калькулятор">{{ entry.amount_cents|money(entry.currency) }}{% if entry.reference_rate %}<small>курс {{ entry.reference_rate }} → {{ entry.fx_rate }}</small>{% elif entry.currency == 'USD' %}<small>курс {{ entry.fx_rate }} BYN</small>{% endif %}</td>
           <td>{{ entry.byn_cents|money }}{% if entry.fx_difference_cents %}<small>курсовая разница {{ entry.fx_difference_cents|money }}</small>{% endif %}</td>
@@ -78,11 +80,11 @@
   </div>
 </main>
 <div class="calculator-bar" id="calculator-bar"><span>Встроенный калькулятор</span><strong id="calculator-total">0,00 Br</strong><small id="calculator-count">Ctrl+клик по исходным суммам</small><button type="button" id="calculator-clear">Сбросить</button></div>
-<footer>Данные хранятся локально · Курсы USD: официальный API НБРБ · Fitnes v2.1</footer>
+<footer>Данные хранятся локально · Курсы USD: официальный API НБРБ · Fitnes v2.2</footer>
 <script>
-  const kind=document.getElementById('kind'),sign=document.getElementById('sign'),currency=document.getElementById('currency'),rate=document.getElementById('rate-label'),reference=document.getElementById('reference-label'),hint=document.getElementById('operation-hint');
+  const kind=document.getElementById('kind'),sign=document.getElementById('sign'),currency=document.getElementById('currency'),rate=document.getElementById('rate-label'),reference=document.getElementById('reference-label'),depositSource=document.getElementById('deposit-source-label'),hint=document.getElementById('operation-hint');
   function updateKind(){const option=kind.selectedOptions[0];sign.value=option.dataset.sign;if(option.dataset.mode==='deposit_add')hint.innerHTML='<b>Займ:</b> сумма зачислится на депозит. При валютном размещении укажите курс внесения в пояснении или при снятии.';else if(option.dataset.mode==='deposit_use')hint.innerHTML='<b>Курсовая разница:</b> введите исходную сумму в BYN, курс внесения и курс получения. Например: 30 000; 3,2; 2,7 → получено 25 312,50, потеря 4 687,50, депозит закрыт полностью.';else hint.innerHTML='<b>Правило:</b> «+» увеличивает задолженность выбранного собственника перед вторым, «−» уменьшает её.';updateCurrency()}
-  function updateCurrency(){const isFx=kind.selectedOptions[0].dataset.mode==='deposit_use';rate.style.display=(currency.value==='USD'||isFx)?'block':'none';reference.style.display=isFx?'block':'none'}
+  function updateCurrency(){const mode=kind.selectedOptions[0].dataset.mode,isDeposit=mode==='deposit_add'||mode==='deposit_use',isFx=mode==='deposit_use';rate.style.display=(currency.value==='USD'||isFx)?'block':'none';reference.style.display=isFx?'block':'none';depositSource.style.display=isDeposit?'block':'none'}
   kind.addEventListener('change',updateKind);currency.addEventListener('change',updateCurrency);updateKind();
 
   const calcCells=[...document.querySelectorAll('.calc-amount')],calcBar=document.getElementById('calculator-bar'),calcTotal=document.getElementById('calculator-total'),calcCount=document.getElementById('calculator-count');

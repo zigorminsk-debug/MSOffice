@@ -144,7 +144,7 @@ class BalanceGUI(tk.Tk):
 
         form = tk.LabelFrame(self, text="  Новая операция  ", bg="#fff", fg="#16221d", font=("Segoe UI", 10, "bold"), padx=14, pady=10)
         form.pack(fill="x", padx=20, pady=(16, 8))
-        names = ("date", "owner", "kind", "sign", "amount", "currency", "rate", "reference", "from", "to", "description")
+        names = ("date", "owner", "kind", "sign", "amount", "currency", "rate", "reference", "deposit_source", "from", "to", "description")
         self.vars = {name: tk.StringVar() for name in names}
         self.vars.update({"date": tk.StringVar(value=date.today().isoformat()), "owner": tk.StringVar(value="Юра"),
                           "sign": tk.StringVar(value="+"), "currency": tk.StringVar(value="BYN")})
@@ -175,13 +175,17 @@ class BalanceGUI(tk.Tk):
         field("Пояснение", "description", 1, 5, span=2, width=30)
         self.save_button = ttk.Button(form, text="Добавить", command=self.add)
         self.save_button.grid(row=1, column=7, padx=4, pady=(18, 3), sticky="ew")
+        field("Источник депозита / от кого получены деньги", "deposit_source", 2, 0, span=4, width=36)
+        tk.Label(form, text="Для внесения и расхода из депозита укажите одинаковое имя: Юра, Игорь, ООО…", bg="#fff", fg="#7b8780", font=("Segoe UI", 8)).grid(row=2, column=4, columnspan=4, sticky="w", padx=6, pady=(18, 0))
         self.editing_id: int | None = None
         self.edit_note_label = tk.Label(form, text="", bg="#fff", fg="#7b5b24", font=("Segoe UI", 8, "bold"), anchor="w")
-        self.edit_note_label.grid(row=2, column=0, columnspan=8, sticky="ew", padx=4, pady=(5, 0))
+        self.edit_note_label.grid(row=3, column=0, columnspan=8, sticky="ew", padx=4, pady=(5, 0))
         for column in range(8): form.grid_columnconfigure(column, weight=1)
 
         content = tk.Frame(self, bg="#f1f4f0"); content.pack(fill="both", expand=True, padx=20, pady=(0, 18))
-        self.stats = tk.Label(content, bg="#f1f4f0", fg="#506058", font=("Segoe UI", 9)); self.stats.pack(fill="x", pady=5)
+        self.stats = tk.Label(content, bg="#f1f4f0", fg="#506058", font=("Segoe UI", 9)); self.stats.pack(fill="x", pady=(5, 2))
+        self.deposit_banner = tk.Label(content, bg="#dcecdf", fg="#174e37", font=("Segoe UI", 10, "bold"), anchor="w", padx=12, pady=7)
+        self.deposit_banner.pack(fill="x", pady=(0, 6))
         columns = ("date", "operation", "owner", "flow", "original", "byn", "effect", "description")
         self.table = ttk.Treeview(content, columns=columns, show="headings", selectmode="browse")
         headings = {"date":"Дата", "operation":"Операция", "owner":"Баланс", "flow":"От кого → кому", "original":"Исходная сумма", "byn":"Сумма BYN", "effect":"Влияние", "description":"Пояснение"}
@@ -213,6 +217,7 @@ class BalanceGUI(tk.Tk):
             "sign": 1 if self.vars["sign"].get() == "+" else -1,
             "owner": self.vars["owner"].get(), "currency": self.vars["currency"].get(),
             "fx_rate": self.vars["rate"].get(), "reference_rate": self.vars["reference"].get(),
+            "deposit_source": self.vars["deposit_source"].get(),
             "from_party": self.vars["from"].get(), "to_party": self.vars["to"].get(),
             "description": self.vars["description"].get(),
         }
@@ -229,7 +234,7 @@ class BalanceGUI(tk.Tk):
         self.refresh()
 
     def _reset_form(self) -> None:
-        for key in ("amount", "rate", "reference", "from", "to", "description"):
+        for key in ("amount", "rate", "reference", "deposit_source", "from", "to", "description"):
             self.vars[key].set("")
         self.editing_id = None
         self.save_button.config(text="Добавить")
@@ -271,6 +276,7 @@ class BalanceGUI(tk.Tk):
         self.vars["currency"].set(item.currency)
         self.vars["rate"].set(item.fx_rate if item.currency == "USD" or item.reference_rate else "")
         self.vars["reference"].set(item.reference_rate)
+        self.vars["deposit_source"].set(item.deposit_source)
         self.vars["from"].set(item.from_party); self.vars["to"].set(item.to_party)
         self.vars["description"].set(item.description)
         self.editing_id = item.id
@@ -305,12 +311,23 @@ class BalanceGUI(tk.Tk):
                 original = "✓ " + original
                 calculator_total += item.calculator_byn_cents
                 tags.append("calc")
-            self.table.insert("", "end", iid=str(item.id), values=(item.operation_date, item.kind_label, item.owner,
+            operation = item.kind_label
+            if item.mode in {"deposit_add", "deposit_use"}:
+                operation += f" · от {item.deposit_name}"
+            self.table.insert("", "end", iid=str(item.id), values=(item.operation_date, operation, item.owner,
                 f"{item.from_party or '—'} → {item.to_party or '—'}", original, format_money(item.byn_cents), effect, note), tags=tuple(tags))
         if self.calculator_ids:
             self.calculator_label.config(text=f"Калькулятор: выбрано {len(self.calculator_ids)} · Итого {format_money(calculator_total)}")
         else:
             self.calculator_label.config(text="Калькулятор: Ctrl+клик по ячейке «Исходная сумма»")
+        deposits = self.ledger.deposit_balances()
+        if deposits:
+            deposit_text = "   ·   ".join(f"На депозите от {item['source']}: {format_money(int(item['balance']))}" for item in deposits)
+            self.deposit_banner.config(text=deposit_text)
+            if not self.deposit_banner.winfo_manager():
+                self.deposit_banner.pack(fill="x", pady=(0, 6), after=self.stats)
+        else:
+            self.deposit_banner.pack_forget()
         summary = self.ledger.summary()
         if summary["debt"] > 0: title, value = "Юра должен Игорю", summary["debt"]
         elif summary["debt"] < 0: title, value = "Игорь должен Юре", -summary["debt"]

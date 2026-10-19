@@ -27,6 +27,12 @@ def test_web_add_and_export(tmp_path):
     assert "Операция обновлена".encode("utf-8") in edited.data
     assert "900,00".encode() in edited.data
     assert "Изменено:".encode("utf-8") in edited.data
+    deposited = client.post("/entries", data={
+        "operation_date": "2026-01-03", "kind": "loan_deposit", "amount": "5000",
+        "sign": "1", "owner": "Юра", "currency": "BYN", "deposit_source": "ООО Тест",
+    }, follow_redirects=True)
+    assert "На депозите от".encode("utf-8") in deposited.data
+    assert "ООО Тест".encode("utf-8") in deposited.data
     assert client.get("/health").json == {"status": "ok"}
     help_page = client.get("/help")
     assert help_page.status_code == 200
