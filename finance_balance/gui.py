@@ -43,6 +43,7 @@ class BalanceGUI(tk.Tk):
         self.minsize(980, 650)
         self.configure(bg="#f1f4f0")
         self.web_started = False
+        self.calculator_ids: set[int] = set()
         self._configure_styles()
         self._build()
         self.refresh()
@@ -189,12 +190,16 @@ class BalanceGUI(tk.Tk):
             self.table.heading(key, text=headings[key]); self.table.column(key, width=widths[key], anchor="e" if key in ("original", "byn") else "w")
         self.table.pack(fill="both", expand=True)
         self.table.tag_configure("plus", foreground="#ad4239"); self.table.tag_configure("minus", foreground="#1e6849")
+        self.table.tag_configure("calc", background="#fff0b8")
+        self.table.bind("<Control-Button-1>", self._on_calculator_click)
         bottom = tk.Frame(content, bg="#f1f4f0"); bottom.pack(fill="x", pady=(8, 0))
         ttk.Button(bottom, text="Удалить выбранную запись", command=self.delete_selected).pack(side="right")
         ttk.Button(bottom, text="Редактировать выбранную", command=self.edit_selected).pack(side="right", padx=6)
         self.table.bind("<Double-Button-1>", self._on_table_double_click)
         self.db_path_label = tk.Label(bottom, text=f"База: {self.ledger.db_path}", bg="#f1f4f0", fg="#7b8780", font=("Segoe UI", 8))
         self.db_path_label.pack(side="left")
+        self.calculator_label = tk.Label(bottom, text="Калькулятор: Ctrl+клик по ячейке «Исходная сумма»", bg="#f1f4f0", fg="#1e6849", font=("Segoe UI", 9, "bold"))
+        self.calculator_label.pack(side="left", padx=24)
 
     def _preset_sign(self, _event=None) -> None:
         code = self.kind_labels[self.vars["kind"].get()]
@@ -230,7 +235,21 @@ class BalanceGUI(tk.Tk):
         self.save_button.config(text="Добавить")
         self.edit_note_label.config(text="")
 
+    def _on_calculator_click(self, event) -> str:
+        row_id = self.table.identify_row(event.y)
+        column = self.table.identify_column(event.x)
+        if row_id and column == "#5":
+            entry_id = int(row_id)
+            if entry_id in self.calculator_ids:
+                self.calculator_ids.remove(entry_id)
+            else:
+                self.calculator_ids.add(entry_id)
+            self.refresh()
+        return "break"
+
     def _on_table_double_click(self, event) -> str:
+        if event.state & 0x0004:  # Ctrl+двойной клик относится к калькулятору.
+            return "break"
         row_id = self.table.identify_row(event.y)
         if row_id:
             self.table.selection_set(row_id)
@@ -261,7 +280,11 @@ class BalanceGUI(tk.Tk):
 
     def refresh(self) -> None:
         for row in self.table.get_children(): self.table.delete(row)
-        for item in self.ledger.list():
+        entries = self.ledger.list()
+        valid_ids = {item.id for item in entries}
+        self.calculator_ids.intersection_update(valid_ids)
+        calculator_total = 0
+        for item in entries:
             if item.mode == "debt":
                 effect = ("Юра → Игорю" if item.effect_cents > 0 else "Игорь → Юре") + f" {format_money(abs(item.effect_cents))}"
                 tag = "plus" if item.effect_cents > 0 else "minus"
@@ -277,8 +300,17 @@ class BalanceGUI(tk.Tk):
             note = item.description
             if item.edit_note:
                 note = f"{note}  |  {item.edit_note}" if note else item.edit_note
+            tags = [tag]
+            if item.id in self.calculator_ids:
+                original = "✓ " + original
+                calculator_total += item.calculator_byn_cents
+                tags.append("calc")
             self.table.insert("", "end", iid=str(item.id), values=(item.operation_date, item.kind_label, item.owner,
-                f"{item.from_party or '—'} → {item.to_party or '—'}", original, format_money(item.byn_cents), effect, note), tags=(tag,))
+                f"{item.from_party or '—'} → {item.to_party or '—'}", original, format_money(item.byn_cents), effect, note), tags=tuple(tags))
+        if self.calculator_ids:
+            self.calculator_label.config(text=f"Калькулятор: выбрано {len(self.calculator_ids)} · Итого {format_money(calculator_total)}")
+        else:
+            self.calculator_label.config(text="Калькулятор: Ctrl+клик по ячейке «Исходная сумма»")
         summary = self.ledger.summary()
         if summary["debt"] > 0: title, value = "Юра должен Игорю", summary["debt"]
         elif summary["debt"] < 0: title, value = "Игорь должен Юре", -summary["debt"]
@@ -335,6 +367,7 @@ class BalanceGUI(tk.Tk):
             self.database_selector.set(self.security.database_name(self.ledger.db_path))
             return
         self.ledger, self.database_security = unlocked
+        self.calculator_ids.clear()
         self.security.set_database(path, selected_name)
         self.db_path_label.config(text=f"База: {self.ledger.db_path}")
         self.refresh()
@@ -412,6 +445,8 @@ class BalanceGUI(tk.Tk):
                     messagebox.showerror("Fitnes", str(error), parent=window); return
             self.security.set_database(target_path, name_var.get() or Path(target_path).stem)
             self.security.set_network_access(network_var.get())
+            if str(self.ledger.db_path) != str(target_ledger.db_path):
+                self.calculator_ids.clear()
             self.ledger, self.database_security = target_ledger, target_security
             self.db_path_label.config(text=f"База: {self.ledger.db_path}")
             self._refresh_database_selector()

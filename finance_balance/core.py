@@ -164,6 +164,13 @@ class Entry:
     def original_money(self) -> str:
         return format_money(self.amount_cents, self.currency)
 
+    @property
+    def calculator_byn_cents(self) -> int:
+        """Исходная сумма ячейки, приведённая к BYN для калькулятора."""
+        if self.currency == "BYN":
+            return self.amount_cents
+        return self.byn_cents
+
 
 class Ledger:
     def __init__(self, db_path: str | Path | None = None, rate_provider: NBRBRateProvider | None = None):

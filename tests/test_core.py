@@ -110,6 +110,16 @@ def test_edit_entry_recalculates_balance(tmp_path):
     assert ledger.summary()["debt"] == -20_000
 
 
+def test_calculator_uses_source_amount_converted_to_byn(tmp_path):
+    ledger = Ledger(tmp_path / "calculator.db")
+    byn_id = ledger.add(operation_date="2026-01-01", kind="purchase", amount="100", sign=1,
+                        owner="Юра", currency="BYN")
+    usd_id = ledger.add(operation_date="2026-01-02", kind="purchase", amount="10", sign=1,
+                        owner="Юра", currency="USD", fx_rate="3")
+    assert ledger.get(byn_id).calculator_byn_cents == 10_000
+    assert ledger.get(usd_id).calculator_byn_cents == 3_000
+
+
 def test_delete(tmp_path):
     ledger = Ledger(tmp_path / "test.db")
     entry_id = ledger.add(operation_date="2026-01-01", kind="fine", amount="500", sign=1, owner="Юра")

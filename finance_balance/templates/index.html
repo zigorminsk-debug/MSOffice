@@ -68,7 +68,7 @@
         <tbody>{% for entry in entries %}<tr>
           <td><strong>{{ entry.kind_label }}</strong><small>{{ entry.operation_date }} · {{ entry.section }}</small>{% if entry.description %}<em>{{ entry.description }}</em>{% endif %}{% if entry.edit_note %}<em class="audit-note">{{ entry.edit_note }}</em>{% endif %}</td>
           <td><strong>{{ entry.owner }}</strong><small>{{ entry.from_party or '—' }} → {{ entry.to_party or '—' }}</small></td>
-          <td>{{ entry.amount_cents|money(entry.currency) }}{% if entry.reference_rate %}<small>курс {{ entry.reference_rate }} → {{ entry.fx_rate }}</small>{% elif entry.currency == 'USD' %}<small>курс {{ entry.fx_rate }} BYN</small>{% endif %}</td>
+          <td class="calc-amount" data-calc-byn="{{ entry.calculator_byn_cents }}" title="Ctrl+клик: добавить в калькулятор">{{ entry.amount_cents|money(entry.currency) }}{% if entry.reference_rate %}<small>курс {{ entry.reference_rate }} → {{ entry.fx_rate }}</small>{% elif entry.currency == 'USD' %}<small>курс {{ entry.fx_rate }} BYN</small>{% endif %}</td>
           <td>{{ entry.byn_cents|money }}{% if entry.fx_difference_cents %}<small>курсовая разница {{ entry.fx_difference_cents|money }}</small>{% endif %}</td>
           <td>{% if entry.mode == 'debt' %}<span class="effect {{ 'up' if entry.effect_cents > 0 else 'down' }}">{% if entry.effect_cents > 0 %}Юра → Игорю +{% else %}Игорь → Юре +{% endif %} {{ (entry.effect_cents|abs)|money }}</span>{% else %}<span class="effect {{ 'up' if entry.deposit_effect_cents < 0 else 'down' }}">Депозит {{ '+' if entry.deposit_effect_cents > 0 else '−' }} {{ (entry.deposit_effect_cents|abs)|money }}</span>{% endif %}</td>
           <td><div class="row-actions"><a class="edit-link" href="{{ url_for('edit_entry', entry_id=entry.id) }}" title="Редактировать">✎</a><form method="post" action="{{ url_for('delete_entry', entry_id=entry.id) }}" onsubmit="return confirm('Удалить эту операцию?')"><button class="delete" title="Удалить">×</button></form></div></td>
@@ -77,11 +77,17 @@
     </section>
   </div>
 </main>
+<div class="calculator-bar" id="calculator-bar"><span>Встроенный калькулятор</span><strong id="calculator-total">0,00 Br</strong><small id="calculator-count">Ctrl+клик по исходным суммам</small><button type="button" id="calculator-clear">Сбросить</button></div>
 <footer>Данные хранятся локально · Курсы USD: официальный API НБРБ · Fitnes v2.1</footer>
 <script>
   const kind=document.getElementById('kind'),sign=document.getElementById('sign'),currency=document.getElementById('currency'),rate=document.getElementById('rate-label'),reference=document.getElementById('reference-label'),hint=document.getElementById('operation-hint');
   function updateKind(){const option=kind.selectedOptions[0];sign.value=option.dataset.sign;if(option.dataset.mode==='deposit_add')hint.innerHTML='<b>Займ:</b> сумма зачислится на депозит. При валютном размещении укажите курс внесения в пояснении или при снятии.';else if(option.dataset.mode==='deposit_use')hint.innerHTML='<b>Курсовая разница:</b> введите исходную сумму в BYN, курс внесения и курс получения. Например: 30 000; 3,2; 2,7 → получено 25 312,50, потеря 4 687,50, депозит закрыт полностью.';else hint.innerHTML='<b>Правило:</b> «+» увеличивает задолженность выбранного собственника перед вторым, «−» уменьшает её.';updateCurrency()}
   function updateCurrency(){const isFx=kind.selectedOptions[0].dataset.mode==='deposit_use';rate.style.display=(currency.value==='USD'||isFx)?'block':'none';reference.style.display=isFx?'block':'none'}
   kind.addEventListener('change',updateKind);currency.addEventListener('change',updateCurrency);updateKind();
+
+  const calcCells=[...document.querySelectorAll('.calc-amount')],calcBar=document.getElementById('calculator-bar'),calcTotal=document.getElementById('calculator-total'),calcCount=document.getElementById('calculator-count');
+  function updateCalculator(){const selected=calcCells.filter(cell=>cell.classList.contains('calc-selected'));const cents=selected.reduce((sum,cell)=>sum+Number(cell.dataset.calcByn),0);calcBar.classList.toggle('visible',selected.length>0);calcTotal.textContent=new Intl.NumberFormat('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2}).format(cents/100)+' Br';calcCount.textContent='Выбрано: '+selected.length}
+  calcCells.forEach(cell=>cell.addEventListener('click',event=>{if(!event.ctrlKey)return;event.preventDefault();cell.classList.toggle('calc-selected');updateCalculator()}));
+  document.getElementById('calculator-clear').addEventListener('click',()=>{calcCells.forEach(cell=>cell.classList.remove('calc-selected'));updateCalculator()});
 </script>
 </body></html>

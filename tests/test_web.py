@@ -14,6 +14,8 @@ def test_web_add_and_export(tmp_path):
     }, follow_redirects=True)
     assert response.status_code == 200
     assert "1\u00a0200,50".encode() in response.data
+    assert b'data-calc-byn="120050"' in response.data
+    assert "Встроенный калькулятор".encode("utf-8") in response.data
     edit_page = client.get("/entries/1/edit")
     assert edit_page.status_code == 200
     edited = client.post("/entries/1/edit", data={
