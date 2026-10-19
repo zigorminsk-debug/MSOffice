@@ -24,6 +24,7 @@ def test_web_add_and_export(tmp_path):
     }, follow_redirects=True)
     assert "Операция обновлена".encode("utf-8") in edited.data
     assert "900,00".encode() in edited.data
+    assert "Изменено:".encode("utf-8") in edited.data
     assert client.get("/health").json == {"status": "ok"}
     help_page = client.get("/help")
     assert help_page.status_code == 200

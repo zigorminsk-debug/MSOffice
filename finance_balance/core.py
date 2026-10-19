@@ -115,6 +115,19 @@ class Entry:
     amount_byn_cents: int = 0
     reference_rate: str = ""
     fx_difference_cents: int = 0
+    edited_at: str = ""
+    edit_count: int = 0
+
+    @property
+    def edit_note(self) -> str:
+        if not self.edited_at:
+            return ""
+        try:
+            moment = datetime.fromisoformat(self.edited_at)
+            suffix = f" · правок: {self.edit_count}" if self.edit_count > 1 else ""
+            return f"Изменено: {moment.strftime('%d.%m.%Y %H:%M:%S')}{suffix}"
+        except ValueError:
+            return f"Изменено: {self.edited_at}"
 
     @property
     def mode(self) -> str:
@@ -164,6 +177,7 @@ class Ledger:
         connection = sqlite3.connect(self.db_path, timeout=15)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA busy_timeout = 15000")
+        connection.execute("PRAGMA foreign_keys = ON")
         try:
             yield connection
             connection.commit()
@@ -207,6 +221,15 @@ class Ledger:
                     db.execute(sql)
             db.execute("UPDATE entries SET amount_byn_cents = amount_cents WHERE amount_byn_cents = 0")
             db.execute("CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(operation_date, id)")
+            db.execute(
+                """CREATE TABLE IF NOT EXISTS entry_edits (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    entry_id INTEGER NOT NULL,
+                    edited_at TEXT NOT NULL,
+                    FOREIGN KEY(entry_id) REFERENCES entries(id) ON DELETE CASCADE
+                )"""
+            )
+            db.execute("CREATE INDEX IF NOT EXISTS idx_entry_edits_entry ON entry_edits(entry_id, id)")
 
     def _prepare_entry(
         self, *, operation_date: str, kind: str, amount: str | int | Decimal,
@@ -280,11 +303,21 @@ class Ledger:
                 amount_byn_cents=?, reference_rate=?, fx_difference_cents=? WHERE id=?""",
                 (*prepared, entry_id),
             )
+            if result.rowcount:
+                edited_at = datetime.now().astimezone().isoformat(timespec="seconds")
+                db.execute("INSERT INTO entry_edits(entry_id, edited_at) VALUES (?, ?)", (entry_id, edited_at))
             return result.rowcount > 0
+
+    @staticmethod
+    def _entry_select() -> str:
+        return """SELECT e.*,
+            COALESCE((SELECT edited_at FROM entry_edits h WHERE h.entry_id=e.id ORDER BY h.id DESC LIMIT 1), '') AS edited_at,
+            (SELECT COUNT(*) FROM entry_edits h WHERE h.entry_id=e.id) AS edit_count
+            FROM entries e"""
 
     def get(self, entry_id: int) -> Entry | None:
         with self.connect() as db:
-            row = db.execute("SELECT * FROM entries WHERE id = ?", (entry_id,)).fetchone()
+            row = db.execute(self._entry_select() + " WHERE e.id = ?", (entry_id,)).fetchone()
         return Entry(**dict(row)) if row else None
 
     def delete(self, entry_id: int) -> bool:
@@ -294,7 +327,7 @@ class Ledger:
 
     def list(self) -> list[Entry]:
         with self.connect() as db:
-            rows = db.execute("SELECT * FROM entries ORDER BY operation_date DESC, id DESC").fetchall()
+            rows = db.execute(self._entry_select() + " ORDER BY e.operation_date DESC, e.id DESC").fetchall()
         return [Entry(**dict(row)) for row in rows]
 
     def summary(self) -> dict[str, int]:
@@ -414,8 +447,8 @@ class Ledger:
             writer = csv.writer(stream, delimiter=";")
             writer.writerow(["Дата", "Раздел", "Операция", "Баланс", "Знак", "Сумма", "Валюта",
                              "Курс внесения", "Курс получения", "Получено BYN", "Курсовая разница",
-                             "От кого", "Кому", "Пояснение", "Изменение взаимного долга",
-                             "Изменение депозита займа"])
+                             "От кого", "Кому", "Пояснение", "Примечание редактирования",
+                             "Изменение взаимного долга", "Изменение депозита займа"])
             for item in reversed(self.list()):
                 writer.writerow([
                     item.operation_date, item.section, item.kind_label, item.owner,
@@ -423,7 +456,7 @@ class Ledger:
                     item.currency, item.reference_rate, item.fx_rate,
                     f"{Decimal(item.byn_cents) / 100:.2f}",
                     f"{Decimal(item.fx_difference_cents) / 100:.2f}",
-                    item.from_party, item.to_party, item.description,
+                    item.from_party, item.to_party, item.description, item.edit_note,
                     f"{Decimal(item.effect_cents) / 100:.2f}",
                     f"{Decimal(item.deposit_effect_cents) / 100:.2f}",
                 ])

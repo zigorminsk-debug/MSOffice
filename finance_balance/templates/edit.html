@@ -2,6 +2,7 @@
 <header class="topbar"><div class="brand"><span class="brand-mark">F</span><div><strong>Fitnes</strong><small>Редактирование операции</small></div></div><a class="button secondary" href="{{ url_for('index') }}">← Отмена</a></header>
 <main class="edit-page"><section class="card form-card"><div class="section-title"><div><span class="eyebrow">ОПЕРАЦИЯ №{{ entry.id }}</span><h2>Редактировать запись</h2></div></div>
 {% with messages=get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}
+<div class="audit-box">{% if entry.edit_note %}<b>{{ entry.edit_note }}</b>{% else %}<b>Запись ещё не редактировалась</b>{% endif %}<span>После сохранения Fitnes автоматически добавит новую неизменяемую отметку даты и времени.</span></div>
 <form method="post">
 <div class="amount-row"><label>Дата<input type="date" name="operation_date" value="{{ entry.operation_date }}" required></label><label>На чей баланс<select name="owner">{% for owner in owners %}<option {{ 'selected' if owner==entry.owner }}>{{ owner }}</option>{% endfor %}</select></label></div>
 <label>Вид операции<select name="kind">{% for code,item in kinds.items() %}<option value="{{ code }}" {{ 'selected' if code==entry.kind }}>{{ item[1] }} · {{ item[0] }}</option>{% endfor %}</select></label>

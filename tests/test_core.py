@@ -96,6 +96,17 @@ def test_edit_entry_recalculates_balance(tmp_path):
                          owner="Игорь", currency="BYN", description="Исправлено")
     entry = ledger.get(entry_id)
     assert entry is not None and entry.description == "Исправлено"
+    assert entry.edit_count == 1
+    assert entry.edited_at
+    assert "Изменено:" in entry.edit_note
+    first_mark = entry.edited_at
+    ledger.update(entry_id, operation_date="2026-01-03", kind="fine", amount="200", sign=1,
+                  owner="Игорь", currency="BYN", description="Исправлено ещё раз")
+    entry = ledger.get(entry_id)
+    assert entry is not None and entry.edit_count == 2
+    with ledger.connect() as db:
+        marks = [row[0] for row in db.execute("SELECT edited_at FROM entry_edits WHERE entry_id=? ORDER BY id", (entry_id,))]
+    assert len(marks) == 2 and marks[0] == first_mark
     assert ledger.summary()["debt"] == -20_000
 
 

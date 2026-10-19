@@ -175,6 +175,8 @@ class BalanceGUI(tk.Tk):
         self.save_button = ttk.Button(form, text="Добавить", command=self.add)
         self.save_button.grid(row=1, column=7, padx=4, pady=(18, 3), sticky="ew")
         self.editing_id: int | None = None
+        self.edit_note_label = tk.Label(form, text="", bg="#fff", fg="#7b5b24", font=("Segoe UI", 8, "bold"), anchor="w")
+        self.edit_note_label.grid(row=2, column=0, columnspan=8, sticky="ew", padx=4, pady=(5, 0))
         for column in range(8): form.grid_columnconfigure(column, weight=1)
 
         content = tk.Frame(self, bg="#f1f4f0"); content.pack(fill="both", expand=True, padx=20, pady=(0, 18))
@@ -190,7 +192,7 @@ class BalanceGUI(tk.Tk):
         bottom = tk.Frame(content, bg="#f1f4f0"); bottom.pack(fill="x", pady=(8, 0))
         ttk.Button(bottom, text="Удалить выбранную запись", command=self.delete_selected).pack(side="right")
         ttk.Button(bottom, text="Редактировать выбранную", command=self.edit_selected).pack(side="right", padx=6)
-        self.table.bind("<Double-1>", lambda _event: self.edit_selected())
+        self.table.bind("<Double-Button-1>", self._on_table_double_click)
         self.db_path_label = tk.Label(bottom, text=f"База: {self.ledger.db_path}", bg="#f1f4f0", fg="#7b8780", font=("Segoe UI", 8))
         self.db_path_label.pack(side="left")
 
@@ -226,6 +228,15 @@ class BalanceGUI(tk.Tk):
             self.vars[key].set("")
         self.editing_id = None
         self.save_button.config(text="Добавить")
+        self.edit_note_label.config(text="")
+
+    def _on_table_double_click(self, event) -> str:
+        row_id = self.table.identify_row(event.y)
+        if row_id:
+            self.table.selection_set(row_id)
+            self.table.focus(row_id)
+            self.after_idle(self.edit_selected)
+        return "break"
 
     def edit_selected(self) -> None:
         selected = self.table.selection()
@@ -245,6 +256,7 @@ class BalanceGUI(tk.Tk):
         self.vars["description"].set(item.description)
         self.editing_id = item.id
         self.save_button.config(text="Сохранить")
+        self.edit_note_label.config(text=item.edit_note or "После сохранения будет добавлена неизменяемая отметка даты и времени редактирования")
         self.focus_force()
 
     def refresh(self) -> None:
@@ -262,8 +274,11 @@ class BalanceGUI(tk.Tk):
                 effect += f"; курс. разница {format_money(item.fx_difference_cents)}"
             elif item.currency == "USD":
                 original += f" @ {item.fx_rate}"
+            note = item.description
+            if item.edit_note:
+                note = f"{note}  |  {item.edit_note}" if note else item.edit_note
             self.table.insert("", "end", iid=str(item.id), values=(item.operation_date, item.kind_label, item.owner,
-                f"{item.from_party or '—'} → {item.to_party or '—'}", original, format_money(item.byn_cents), effect, item.description), tags=(tag,))
+                f"{item.from_party or '—'} → {item.to_party or '—'}", original, format_money(item.byn_cents), effect, note), tags=(tag,))
         summary = self.ledger.summary()
         if summary["debt"] > 0: title, value = "Юра должен Игорю", summary["debt"]
         elif summary["debt"] < 0: title, value = "Игорь должен Юре", -summary["debt"]

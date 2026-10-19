@@ -66,7 +66,7 @@
       {% if entries %}<div class="table-wrap"><table>
         <thead><tr><th>Дата / операция</th><th>Баланс / направление</th><th>Исходная сумма</th><th>Сумма BYN</th><th>Влияние</th><th></th></tr></thead>
         <tbody>{% for entry in entries %}<tr>
-          <td><strong>{{ entry.kind_label }}</strong><small>{{ entry.operation_date }} · {{ entry.section }}</small>{% if entry.description %}<em>{{ entry.description }}</em>{% endif %}</td>
+          <td><strong>{{ entry.kind_label }}</strong><small>{{ entry.operation_date }} · {{ entry.section }}</small>{% if entry.description %}<em>{{ entry.description }}</em>{% endif %}{% if entry.edit_note %}<em class="audit-note">{{ entry.edit_note }}</em>{% endif %}</td>
           <td><strong>{{ entry.owner }}</strong><small>{{ entry.from_party or '—' }} → {{ entry.to_party or '—' }}</small></td>
           <td>{{ entry.amount_cents|money(entry.currency) }}{% if entry.reference_rate %}<small>курс {{ entry.reference_rate }} → {{ entry.fx_rate }}</small>{% elif entry.currency == 'USD' %}<small>курс {{ entry.fx_rate }} BYN</small>{% endif %}</td>
           <td>{{ entry.byn_cents|money }}{% if entry.fx_difference_cents %}<small>курсовая разница {{ entry.fx_difference_cents|money }}</small>{% endif %}</td>
