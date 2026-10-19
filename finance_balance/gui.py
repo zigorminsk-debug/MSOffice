@@ -5,6 +5,7 @@ import sqlite3
 import threading
 import webbrowser
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -142,7 +143,7 @@ class BalanceGUI(tk.Tk):
 
         form = tk.LabelFrame(self, text="  Новая операция  ", bg="#fff", fg="#16221d", font=("Segoe UI", 10, "bold"), padx=14, pady=10)
         form.pack(fill="x", padx=20, pady=(16, 8))
-        names = ("date", "owner", "kind", "sign", "amount", "currency", "rate", "from", "to", "description")
+        names = ("date", "owner", "kind", "sign", "amount", "currency", "rate", "reference", "from", "to", "description")
         self.vars = {name: tk.StringVar() for name in names}
         self.vars.update({"date": tk.StringVar(value=date.today().isoformat()), "owner": tk.StringVar(value="Юра"),
                           "sign": tk.StringVar(value="+"), "currency": tk.StringVar(value="BYN")})
@@ -166,11 +167,14 @@ class BalanceGUI(tk.Tk):
         field("Действие", "sign", 0, 4, values=["+", "−"])
         field("Сумма", "amount", 0, 5)
         field("Валюта", "currency", 0, 6, values=["BYN", "USD"], width=8)
-        field("Курс USD/BYN (пусто = НБРБ)", "rate", 0, 7, width=20)
-        field("От кого", "from", 1, 0, span=2)
-        field("Кому", "to", 1, 2, span=2)
-        field("Пояснение", "description", 1, 4, span=3, width=35)
-        ttk.Button(form, text="Добавить", command=self.add).grid(row=1, column=7, padx=4, pady=(18, 3), sticky="ew")
+        field("Курс получения / USD", "rate", 0, 7, width=20)
+        field("Курс внесения", "reference", 1, 0)
+        field("От кого", "from", 1, 1, span=2)
+        field("Кому", "to", 1, 3, span=2)
+        field("Пояснение", "description", 1, 5, span=2, width=30)
+        self.save_button = ttk.Button(form, text="Добавить", command=self.add)
+        self.save_button.grid(row=1, column=7, padx=4, pady=(18, 3), sticky="ew")
+        self.editing_id: int | None = None
         for column in range(8): form.grid_columnconfigure(column, weight=1)
 
         content = tk.Frame(self, bg="#f1f4f0"); content.pack(fill="both", expand=True, padx=20, pady=(0, 18))
@@ -185,6 +189,8 @@ class BalanceGUI(tk.Tk):
         self.table.tag_configure("plus", foreground="#ad4239"); self.table.tag_configure("minus", foreground="#1e6849")
         bottom = tk.Frame(content, bg="#f1f4f0"); bottom.pack(fill="x", pady=(8, 0))
         ttk.Button(bottom, text="Удалить выбранную запись", command=self.delete_selected).pack(side="right")
+        ttk.Button(bottom, text="Редактировать выбранную", command=self.edit_selected).pack(side="right", padx=6)
+        self.table.bind("<Double-1>", lambda _event: self.edit_selected())
         self.db_path_label = tk.Label(bottom, text=f"База: {self.ledger.db_path}", bg="#f1f4f0", fg="#7b8780", font=("Segoe UI", 8))
         self.db_path_label.pack(side="left")
 
@@ -192,16 +198,54 @@ class BalanceGUI(tk.Tk):
         code = self.kind_labels[self.vars["kind"].get()]
         self.vars["sign"].set("+" if KINDS[code][2] > 0 else "−")
 
+    def _form_values(self) -> dict:
+        return {
+            "operation_date": self.vars["date"].get(),
+            "kind": self.kind_labels[self.vars["kind"].get()],
+            "amount": self.vars["amount"].get(),
+            "sign": 1 if self.vars["sign"].get() == "+" else -1,
+            "owner": self.vars["owner"].get(), "currency": self.vars["currency"].get(),
+            "fx_rate": self.vars["rate"].get(), "reference_rate": self.vars["reference"].get(),
+            "from_party": self.vars["from"].get(), "to_party": self.vars["to"].get(),
+            "description": self.vars["description"].get(),
+        }
+
     def add(self) -> None:
         try:
-            self.ledger.add(operation_date=self.vars["date"].get(), kind=self.kind_labels[self.vars["kind"].get()],
-                amount=self.vars["amount"].get(), sign=1 if self.vars["sign"].get() == "+" else -1,
-                owner=self.vars["owner"].get(), currency=self.vars["currency"].get(), fx_rate=self.vars["rate"].get(),
-                from_party=self.vars["from"].get(), to_party=self.vars["to"].get(), description=self.vars["description"].get())
+            if self.editing_id is None:
+                self.ledger.add(**self._form_values())
+            else:
+                self.ledger.update(self.editing_id, **self._form_values())
         except ValueError as error:
-            messagebox.showerror("Не удалось добавить", str(error), parent=self); return
-        for key in ("amount", "rate", "from", "to", "description"): self.vars[key].set("")
+            messagebox.showerror("Не удалось сохранить", str(error), parent=self); return
+        self._reset_form()
         self.refresh()
+
+    def _reset_form(self) -> None:
+        for key in ("amount", "rate", "reference", "from", "to", "description"):
+            self.vars[key].set("")
+        self.editing_id = None
+        self.save_button.config(text="Добавить")
+
+    def edit_selected(self) -> None:
+        selected = self.table.selection()
+        if not selected:
+            messagebox.showinfo("Редактирование", "Выберите запись в таблице", parent=self); return
+        item = self.ledger.get(int(selected[0]))
+        if not item:
+            return
+        label = next(label for label, code in self.kind_labels.items() if code == item.kind)
+        self.vars["date"].set(item.operation_date); self.vars["kind"].set(label)
+        self.vars["owner"].set(item.owner); self.vars["sign"].set("+" if item.sign > 0 else "−")
+        self.vars["amount"].set(f"{Decimal(item.amount_cents) / 100:.2f}")
+        self.vars["currency"].set(item.currency)
+        self.vars["rate"].set(item.fx_rate if item.currency == "USD" or item.reference_rate else "")
+        self.vars["reference"].set(item.reference_rate)
+        self.vars["from"].set(item.from_party); self.vars["to"].set(item.to_party)
+        self.vars["description"].set(item.description)
+        self.editing_id = item.id
+        self.save_button.config(text="Сохранить")
+        self.focus_force()
 
     def refresh(self) -> None:
         for row in self.table.get_children(): self.table.delete(row)
@@ -213,7 +257,11 @@ class BalanceGUI(tk.Tk):
                 effect = f"Депозит {'+' if item.deposit_effect_cents > 0 else '−'} {format_money(abs(item.deposit_effect_cents))}"
                 tag = "minus" if item.deposit_effect_cents > 0 else "plus"
             original = format_money(item.amount_cents, item.currency)
-            if item.currency == "USD": original += f" @ {item.fx_rate}"
+            if item.reference_rate:
+                original += f" @ {item.reference_rate}→{item.fx_rate}"
+                effect += f"; курс. разница {format_money(item.fx_difference_cents)}"
+            elif item.currency == "USD":
+                original += f" @ {item.fx_rate}"
             self.table.insert("", "end", iid=str(item.id), values=(item.operation_date, item.kind_label, item.owner,
                 f"{item.from_party or '—'} → {item.to_party or '—'}", original, format_money(item.byn_cents), effect, item.description), tags=(tag,))
         summary = self.ledger.summary()
@@ -221,7 +269,7 @@ class BalanceGUI(tk.Tk):
         elif summary["debt"] < 0: title, value = "Игорь должен Юре", -summary["debt"]
         else: title, value = "Расчёты закрыты", 0
         self.debt_title.config(text=title); self.debt_value.config(text=format_money(value))
-        self.stats.config(text=f"Приход: {format_money(summary['incoming'])}   Расходы: {format_money(summary['expenses'])}   Депозит займа Игоря: {format_money(summary['igor_deposit'])}   Депозит займа Юры: {format_money(summary['yura_deposit'])}")
+        self.stats.config(text=f"Приход: {format_money(summary['incoming'])}   Расходы: {format_money(summary['expenses'])}   Курсовая разница: {format_money(summary['fx_difference'])}   Депозит Игоря: {format_money(summary['igor_deposit'])}   Депозит Юры: {format_money(summary['yura_deposit'])}")
 
     def delete_selected(self) -> None:
         selected = self.table.selection()

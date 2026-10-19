@@ -14,6 +14,16 @@ def test_web_add_and_export(tmp_path):
     }, follow_redirects=True)
     assert response.status_code == 200
     assert "1\u00a0200,50".encode() in response.data
+    edit_page = client.get("/entries/1/edit")
+    assert edit_page.status_code == 200
+    edited = client.post("/entries/1/edit", data={
+        "operation_date": "2026-01-02", "kind": "purchase", "amount": "900",
+        "sign": "1", "owner": "Игорь", "currency": "BYN", "fx_rate": "",
+        "reference_rate": "", "from_party": "Компания", "to_party": "Магазин",
+        "description": "Исправлено",
+    }, follow_redirects=True)
+    assert "Операция обновлена".encode("utf-8") in edited.data
+    assert "900,00".encode() in edited.data
     assert client.get("/health").json == {"status": "ok"}
     help_page = client.get("/help")
     assert help_page.status_code == 200

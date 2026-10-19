@@ -1,0 +1,14 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Редактирование · Fitnes</title><link rel="icon" href="{{ url_for('static', filename='fitnes-icon.png') }}"><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"></head><body>
+<header class="topbar"><div class="brand"><span class="brand-mark">F</span><div><strong>Fitnes</strong><small>Редактирование операции</small></div></div><a class="button secondary" href="{{ url_for('index') }}">← Отмена</a></header>
+<main class="edit-page"><section class="card form-card"><div class="section-title"><div><span class="eyebrow">ОПЕРАЦИЯ №{{ entry.id }}</span><h2>Редактировать запись</h2></div></div>
+{% with messages=get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}
+<form method="post">
+<div class="amount-row"><label>Дата<input type="date" name="operation_date" value="{{ entry.operation_date }}" required></label><label>На чей баланс<select name="owner">{% for owner in owners %}<option {{ 'selected' if owner==entry.owner }}>{{ owner }}</option>{% endfor %}</select></label></div>
+<label>Вид операции<select name="kind">{% for code,item in kinds.items() %}<option value="{{ code }}" {{ 'selected' if code==entry.kind }}>{{ item[1] }} · {{ item[0] }}</option>{% endfor %}</select></label>
+<div class="amount-row"><label>Действие<select name="sign"><option value="1" {{ 'selected' if entry.sign>0 }}>＋ увеличить</option><option value="-1" {{ 'selected' if entry.sign<0 }}>− уменьшить</option></select></label><label>Сумма<input name="amount" value="{{ '%.2f'|format(entry.amount_cents/100) }}" required></label></div>
+<div class="amount-row"><label>Валюта<select name="currency">{% for currency in currencies %}<option {{ 'selected' if currency==entry.currency }}>{{ currency }}</option>{% endfor %}</select></label><label>Курс получения / USD<input name="fx_rate" value="{{ entry.fx_rate if entry.currency=='USD' or entry.reference_rate else '' }}"></label></div>
+<label>Курс внесения на валютный депозит<input name="reference_rate" value="{{ entry.reference_rate }}"><small class="field-help">Для курсовой разницы заполните курс внесения и курс получения.</small></label>
+<div class="amount-row"><label>От кого<input name="from_party" value="{{ entry.from_party }}"></label><label>Кому<input name="to_party" value="{{ entry.to_party }}"></label></div>
+<label>Пояснение<textarea name="description" rows="3">{{ entry.description }}</textarea></label>
+<div class="edit-actions"><a class="button secondary" href="{{ url_for('index') }}">Отмена</a><button class="button primary" type="submit">Сохранить изменения</button></div>
+</form></section></main></body></html>

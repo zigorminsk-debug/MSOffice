@@ -26,6 +26,7 @@
   <section class="stats loan-stats">
     <article><span>Приход</span><strong>{{ summary.incoming|money }}</strong></article>
     <article><span>Расходы</span><strong>{{ summary.expenses|money }}</strong></article>
+    <article><span>Курсовая разница</span><strong>{{ summary.fx_difference|money }}</strong></article>
     <article><span>Депозит займа · Игорь</span><strong>{{ summary.igor_deposit|money }}</strong></article>
     <article><span>Депозит займа · Юра</span><strong>{{ summary.yura_deposit|money }}</strong></article>
   </section>
@@ -47,8 +48,9 @@
         </div>
         <div class="amount-row">
           <label>Валюта<select name="currency" id="currency">{% for currency in currencies %}<option>{{ currency }}</option>{% endfor %}</select></label>
-          <label id="rate-label">Курс USD, BYN<input type="text" inputmode="decimal" name="fx_rate" placeholder="Автоматически с НБРБ"><small class="field-help">Оставьте пустым для загрузки курса НБРБ.</small></label>
+          <label id="rate-label">Курс получения / USD<input type="text" inputmode="decimal" name="fx_rate" placeholder="Например, 2,7"><small class="field-help">Для USD без курсовой разницы можно оставить пустым: загрузится НБРБ.</small></label>
         </div>
+        <label id="reference-label">Курс внесения на валютный депозит<input type="text" inputmode="decimal" name="reference_rate" placeholder="Например, 3,2"><small class="field-help">Заполните оба курса для автоматического расчёта курсовой разницы.</small></label>
         <div class="amount-row">
           <label>От кого<input type="text" name="from_party" placeholder="Банк, Юра, компания…"></label>
           <label>Кому<input type="text" name="to_party" placeholder="Игорь, магазин…"></label>
@@ -66,10 +68,10 @@
         <tbody>{% for entry in entries %}<tr>
           <td><strong>{{ entry.kind_label }}</strong><small>{{ entry.operation_date }} · {{ entry.section }}</small>{% if entry.description %}<em>{{ entry.description }}</em>{% endif %}</td>
           <td><strong>{{ entry.owner }}</strong><small>{{ entry.from_party or '—' }} → {{ entry.to_party or '—' }}</small></td>
-          <td>{{ entry.amount_cents|money(entry.currency) }}{% if entry.currency == 'USD' %}<small>курс {{ entry.fx_rate }} BYN</small>{% endif %}</td>
-          <td>{{ entry.byn_cents|money }}</td>
+          <td>{{ entry.amount_cents|money(entry.currency) }}{% if entry.reference_rate %}<small>курс {{ entry.reference_rate }} → {{ entry.fx_rate }}</small>{% elif entry.currency == 'USD' %}<small>курс {{ entry.fx_rate }} BYN</small>{% endif %}</td>
+          <td>{{ entry.byn_cents|money }}{% if entry.fx_difference_cents %}<small>курсовая разница {{ entry.fx_difference_cents|money }}</small>{% endif %}</td>
           <td>{% if entry.mode == 'debt' %}<span class="effect {{ 'up' if entry.effect_cents > 0 else 'down' }}">{% if entry.effect_cents > 0 %}Юра → Игорю +{% else %}Игорь → Юре +{% endif %} {{ (entry.effect_cents|abs)|money }}</span>{% else %}<span class="effect {{ 'up' if entry.deposit_effect_cents < 0 else 'down' }}">Депозит {{ '+' if entry.deposit_effect_cents > 0 else '−' }} {{ (entry.deposit_effect_cents|abs)|money }}</span>{% endif %}</td>
-          <td><form method="post" action="{{ url_for('delete_entry', entry_id=entry.id) }}" onsubmit="return confirm('Удалить эту операцию?')"><button class="delete" title="Удалить">×</button></form></td>
+          <td><div class="row-actions"><a class="edit-link" href="{{ url_for('edit_entry', entry_id=entry.id) }}" title="Редактировать">✎</a><form method="post" action="{{ url_for('delete_entry', entry_id=entry.id) }}" onsubmit="return confirm('Удалить эту операцию?')"><button class="delete" title="Удалить">×</button></form></div></td>
         </tr>{% endfor %}</tbody>
       </table></div>{% else %}<div class="empty"><div>Br</div><h3>Операций пока нет</h3><p>Добавьте первую запись слева. Итог пересчитается автоматически.</p></div>{% endif %}
     </section>
@@ -77,9 +79,9 @@
 </main>
 <footer>Данные хранятся локально · Курсы USD: официальный API НБРБ · Fitnes v2.0</footer>
 <script>
-  const kind=document.getElementById('kind'),sign=document.getElementById('sign'),currency=document.getElementById('currency'),rate=document.getElementById('rate-label'),hint=document.getElementById('operation-hint');
-  function updateKind(){const option=kind.selectedOptions[0];sign.value=option.dataset.sign;if(option.dataset.mode==='deposit_add')hint.innerHTML='<b>Займ:</b> сумма зачислится на отдельный депозит выбранного собственника и не изменит взаимный долг.';else if(option.dataset.mode==='deposit_use')hint.innerHTML='<b>Использование займа:</b> сумма уменьшит депозит выбранного собственника и не изменит взаимный долг.';else hint.innerHTML='<b>Правило:</b> «+» увеличивает задолженность выбранного собственника перед вторым, «−» уменьшает её.'}
-  function updateCurrency(){rate.style.display=currency.value==='USD'?'block':'none'}
-  kind.addEventListener('change',updateKind);currency.addEventListener('change',updateCurrency);updateKind();updateCurrency();
+  const kind=document.getElementById('kind'),sign=document.getElementById('sign'),currency=document.getElementById('currency'),rate=document.getElementById('rate-label'),reference=document.getElementById('reference-label'),hint=document.getElementById('operation-hint');
+  function updateKind(){const option=kind.selectedOptions[0];sign.value=option.dataset.sign;if(option.dataset.mode==='deposit_add')hint.innerHTML='<b>Займ:</b> сумма зачислится на депозит. При валютном размещении укажите курс внесения в пояснении или при снятии.';else if(option.dataset.mode==='deposit_use')hint.innerHTML='<b>Курсовая разница:</b> введите исходную сумму в BYN, курс внесения и курс получения. Например: 30 000; 3,2; 2,7 → получено 25 312,50, потеря 4 687,50, депозит закрыт полностью.';else hint.innerHTML='<b>Правило:</b> «+» увеличивает задолженность выбранного собственника перед вторым, «−» уменьшает её.';updateCurrency()}
+  function updateCurrency(){const isFx=kind.selectedOptions[0].dataset.mode==='deposit_use';rate.style.display=(currency.value==='USD'||isFx)?'block':'none';reference.style.display=isFx?'block':'none'}
+  kind.addEventListener('change',updateKind);currency.addEventListener('change',updateCurrency);updateKind();
 </script>
 </body></html>

@@ -72,6 +72,33 @@ def test_csv_import_is_atomic_on_error(tmp_path):
     assert ledger.list() == []
 
 
+def test_exchange_difference_closes_deposit_without_debt(tmp_path):
+    ledger = Ledger(tmp_path / "fx.db")
+    ledger.add(operation_date="2026-01-01", kind="loan_deposit", amount="30000", sign=1,
+               owner="Юра", currency="BYN", description="Валютный депозит по курсу 3,2")
+    use_id = ledger.add(operation_date="2026-06-01", kind="loan_use", amount="30000", sign=-1,
+                        owner="Юра", currency="BYN", reference_rate="3.2", fx_rate="2.7")
+    entry = ledger.get(use_id)
+    assert entry is not None
+    assert entry.byn_cents == 2_531_250
+    assert entry.fx_difference_cents == 468_750
+    assert entry.deposit_effect_cents == -3_000_000
+    summary = ledger.summary()
+    assert summary["yura_deposit"] == 0
+    assert summary["fx_difference"] == 468_750
+    assert summary["debt"] == 0
+
+
+def test_edit_entry_recalculates_balance(tmp_path):
+    ledger = Ledger(tmp_path / "edit.db")
+    entry_id = ledger.add(operation_date="2026-01-01", kind="fine", amount="500", sign=1, owner="Юра")
+    assert ledger.update(entry_id, operation_date="2026-01-02", kind="fine", amount="200", sign=1,
+                         owner="Игорь", currency="BYN", description="Исправлено")
+    entry = ledger.get(entry_id)
+    assert entry is not None and entry.description == "Исправлено"
+    assert ledger.summary()["debt"] == -20_000
+
+
 def test_delete(tmp_path):
     ledger = Ledger(tmp_path / "test.db")
     entry_id = ledger.add(operation_date="2026-01-01", kind="fine", amount="500", sign=1, owner="Юра")

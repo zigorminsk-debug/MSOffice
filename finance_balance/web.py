@@ -85,6 +85,7 @@ def create_app(
                 owner=request.form.get("owner", ""),
                 currency=request.form.get("currency", "BYN"),
                 fx_rate=request.form.get("fx_rate", ""),
+                reference_rate=request.form.get("reference_rate", ""),
                 from_party=request.form.get("from_party", ""),
                 to_party=request.form.get("to_party", ""),
                 description=request.form.get("description", ""),
@@ -93,6 +94,30 @@ def create_app(
         except ValueError as error:
             flash(str(error), "error")
         return redirect(url_for("index"))
+
+    @app.route("/entries/<int:entry_id>/edit", methods=["GET", "POST"])
+    def edit_entry(entry_id: int):
+        ledger: Ledger = app.config["LEDGER"]
+        entry = ledger.get(entry_id)
+        if not entry:
+            flash("Операция не найдена", "error")
+            return redirect(url_for("index"))
+        if request.method == "POST":
+            try:
+                ledger.update(
+                    entry_id, operation_date=request.form.get("operation_date", ""),
+                    kind=request.form.get("kind", ""), amount=request.form.get("amount", ""),
+                    sign=request.form.get("sign", ""), owner=request.form.get("owner", ""),
+                    currency=request.form.get("currency", "BYN"), fx_rate=request.form.get("fx_rate", ""),
+                    reference_rate=request.form.get("reference_rate", ""),
+                    from_party=request.form.get("from_party", ""), to_party=request.form.get("to_party", ""),
+                    description=request.form.get("description", ""),
+                )
+                flash("Операция обновлена", "success")
+                return redirect(url_for("index"))
+            except ValueError as error:
+                flash(str(error), "error")
+        return render_template("edit.html", entry=entry, kinds=KINDS, owners=OWNERS, currencies=CURRENCIES)
 
     @app.post("/entries/<int:entry_id>/delete")
     def delete_entry(entry_id: int):

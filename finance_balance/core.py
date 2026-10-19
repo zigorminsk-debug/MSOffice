@@ -113,6 +113,8 @@ class Entry:
     currency: str = "BYN"
     fx_rate: str = "1"
     amount_byn_cents: int = 0
+    reference_rate: str = ""
+    fx_difference_cents: int = 0
 
     @property
     def mode(self) -> str:
@@ -130,7 +132,7 @@ class Entry:
         if self.mode == "deposit_add":
             return self.byn_cents
         if self.mode == "deposit_use":
-            return -self.byn_cents
+            return -(self.byn_cents + self.fx_difference_cents)
         return 0
 
     @property
@@ -185,7 +187,9 @@ class Ledger:
                     owner TEXT NOT NULL DEFAULT 'Юра',
                     currency TEXT NOT NULL DEFAULT 'BYN',
                     fx_rate TEXT NOT NULL DEFAULT '1',
-                    amount_byn_cents INTEGER NOT NULL DEFAULT 0
+                    amount_byn_cents INTEGER NOT NULL DEFAULT 0,
+                    reference_rate TEXT NOT NULL DEFAULT '',
+                    fx_difference_cents INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -195,6 +199,8 @@ class Ledger:
                 "currency": "ALTER TABLE entries ADD COLUMN currency TEXT NOT NULL DEFAULT 'BYN'",
                 "fx_rate": "ALTER TABLE entries ADD COLUMN fx_rate TEXT NOT NULL DEFAULT '1'",
                 "amount_byn_cents": "ALTER TABLE entries ADD COLUMN amount_byn_cents INTEGER NOT NULL DEFAULT 0",
+                "reference_rate": "ALTER TABLE entries ADD COLUMN reference_rate TEXT NOT NULL DEFAULT ''",
+                "fx_difference_cents": "ALTER TABLE entries ADD COLUMN fx_difference_cents INTEGER NOT NULL DEFAULT 0",
             }
             for column, sql in migrations.items():
                 if column not in existing:
@@ -202,20 +208,13 @@ class Ledger:
             db.execute("UPDATE entries SET amount_byn_cents = amount_cents WHERE amount_byn_cents = 0")
             db.execute("CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(operation_date, id)")
 
-    def add(
-        self,
-        *,
-        operation_date: str,
-        kind: str,
-        amount: str | int | Decimal,
-        sign: int | str,
-        owner: str = "Юра",
-        currency: str = "BYN",
+    def _prepare_entry(
+        self, *, operation_date: str, kind: str, amount: str | int | Decimal,
+        sign: int | str, owner: str = "Юра", currency: str = "BYN",
         fx_rate: str | Decimal | None = None,
-        from_party: str = "",
-        to_party: str = "",
-        description: str = "",
-    ) -> int:
+        reference_rate: str | Decimal | None = None,
+        from_party: str = "", to_party: str = "", description: str = "",
+    ) -> tuple:
         if kind not in KINDS:
             raise ValueError("Неизвестный вид операции")
         try:
@@ -232,21 +231,61 @@ class Ledger:
         cents = money_to_cents(amount) if not isinstance(amount, int) else amount
         if cents <= 0:
             raise ValueError("Сумма должна быть больше нуля")
-        if currency == "USD":
-            rate = decimal_value(fx_rate) if fx_rate and str(fx_rate).strip() else self.rate_provider.get_usd_rate(operation_date)
+
+        reference = decimal_value(reference_rate) if reference_rate and str(reference_rate).strip() else None
+        supplied_rate = decimal_value(fx_rate) if fx_rate and str(fx_rate).strip() else None
+        fx_difference = 0
+        # Для расходования валютного депозита сумма может быть исходным взносом
+        # в BYN. По двум курсам рассчитываются фактическая выплата и разница.
+        if kind == "loan_use" and reference is not None and supplied_rate is not None:
+            if currency == "BYN":
+                received = Decimal(cents) * supplied_rate / reference
+                byn_cents = int(received.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+                fx_difference = cents - byn_cents
+            else:
+                byn_cents = int((Decimal(cents) * supplied_rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+                original_byn = int((Decimal(cents) * reference).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+                fx_difference = original_byn - byn_cents
+            rate = supplied_rate
         else:
-            rate = Decimal("1")
-        byn_cents = int((Decimal(cents) * rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+            if currency == "USD":
+                rate = supplied_rate or self.rate_provider.get_usd_rate(operation_date)
+            else:
+                rate = Decimal("1")
+            byn_cents = int((Decimal(cents) * rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        return (
+            operation_date, kind, cents, sign_int, from_party.strip(), to_party.strip(),
+            description.strip(), owner, currency, str(rate), byn_cents,
+            str(reference) if reference is not None else "", fx_difference,
+        )
+
+    def add(self, **values) -> int:
+        prepared = self._prepare_entry(**values)
         with self.connect() as db:
             cursor = db.execute(
                 """INSERT INTO entries
                 (operation_date, kind, amount_cents, sign, from_party, to_party, description,
-                 owner, currency, fx_rate, amount_byn_cents)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (operation_date, kind, cents, sign_int, from_party.strip(), to_party.strip(),
-                 description.strip(), owner, currency, str(rate), byn_cents),
+                 owner, currency, fx_rate, amount_byn_cents, reference_rate, fx_difference_cents)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                prepared,
             )
             return int(cursor.lastrowid)
+
+    def update(self, entry_id: int, **values) -> bool:
+        prepared = self._prepare_entry(**values)
+        with self.connect() as db:
+            result = db.execute(
+                """UPDATE entries SET operation_date=?, kind=?, amount_cents=?, sign=?,
+                from_party=?, to_party=?, description=?, owner=?, currency=?, fx_rate=?,
+                amount_byn_cents=?, reference_rate=?, fx_difference_cents=? WHERE id=?""",
+                (*prepared, entry_id),
+            )
+            return result.rowcount > 0
+
+    def get(self, entry_id: int) -> Entry | None:
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM entries WHERE id = ?", (entry_id,)).fetchone()
+        return Entry(**dict(row)) if row else None
 
     def delete(self, entry_id: int) -> bool:
         with self.connect() as db:
@@ -271,6 +310,7 @@ class Ledger:
             "increases": sum(item.byn_cents for item in entries if item.mode == "debt" and item.sign > 0),
             "igor_deposit": sum(item.deposit_effect_cents for item in entries if item.owner == "Игорь"),
             "yura_deposit": sum(item.deposit_effect_cents for item in entries if item.owner == "Юра"),
+            "fx_difference": sum(item.fx_difference_cents for item in entries),
         }
 
     def import_csv(self, source: str | Path) -> int:
@@ -340,21 +380,14 @@ class Ledger:
                     sign = -1
                 else:
                     raise ValueError("знак должен быть + или −")
-                amount_cents = money_to_cents(value(row, "Сумма", "Amount", required=True))
-                currency = (value(row, "Валюта", "Currency") or "BYN").upper()
-                if currency not in CURRENCIES:
-                    raise ValueError("валюта должна быть BYN или USD")
-                raw_rate = value(row, "Курс НБРБ", "Курс", "Rate")
-                if currency == "USD":
-                    rate = decimal_value(raw_rate) if raw_rate else self.rate_provider.get_usd_rate(operation_date)
-                else:
-                    rate = Decimal("1")
-                byn_cents = int((Decimal(amount_cents) * rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-                prepared.append((
-                    operation_date, kind, amount_cents, sign,
-                    value(row, "От кого", "From"), value(row, "Кому", "To"),
-                    value(row, "Пояснение", "Описание", "Description"), owner, currency,
-                    str(rate), byn_cents,
+                prepared.append(self._prepare_entry(
+                    operation_date=operation_date, kind=kind,
+                    amount=value(row, "Сумма", "Amount", required=True), sign=sign,
+                    owner=owner, currency=(value(row, "Валюта", "Currency") or "BYN").upper(),
+                    fx_rate=value(row, "Курс получения", "Курс НБРБ", "Курс", "Rate"),
+                    reference_rate=value(row, "Курс внесения", "Исходный курс", "Reference rate"),
+                    from_party=value(row, "От кого", "From"), to_party=value(row, "Кому", "To"),
+                    description=value(row, "Пояснение", "Описание", "Description"),
                 ))
             except (ValueError, InvalidOperation) as error:
                 errors.append(f"строка {line_number}: {error}")
@@ -369,8 +402,8 @@ class Ledger:
             db.executemany(
                 """INSERT INTO entries
                 (operation_date, kind, amount_cents, sign, from_party, to_party, description,
-                 owner, currency, fx_rate, amount_byn_cents)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 owner, currency, fx_rate, amount_byn_cents, reference_rate, fx_difference_cents)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 prepared,
             )
         return len(prepared)
@@ -380,13 +413,16 @@ class Ledger:
         with target.open("w", encoding="utf-8-sig", newline="") as stream:
             writer = csv.writer(stream, delimiter=";")
             writer.writerow(["Дата", "Раздел", "Операция", "Баланс", "Знак", "Сумма", "Валюта",
-                             "Курс НБРБ", "Сумма BYN", "От кого", "Кому", "Пояснение",
-                             "Изменение взаимного долга", "Изменение депозита займа"])
+                             "Курс внесения", "Курс получения", "Получено BYN", "Курсовая разница",
+                             "От кого", "Кому", "Пояснение", "Изменение взаимного долга",
+                             "Изменение депозита займа"])
             for item in reversed(self.list()):
                 writer.writerow([
                     item.operation_date, item.section, item.kind_label, item.owner,
                     "+" if item.sign > 0 else "−", f"{Decimal(item.amount_cents) / 100:.2f}",
-                    item.currency, item.fx_rate, f"{Decimal(item.byn_cents) / 100:.2f}",
+                    item.currency, item.reference_rate, item.fx_rate,
+                    f"{Decimal(item.byn_cents) / 100:.2f}",
+                    f"{Decimal(item.fx_difference_cents) / 100:.2f}",
                     item.from_party, item.to_party, item.description,
                     f"{Decimal(item.effect_cents) / 100:.2f}",
                     f"{Decimal(item.deposit_effect_cents) / 100:.2f}",
