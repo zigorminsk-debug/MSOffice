@@ -128,6 +128,8 @@ class Entry:
     debt_amount_cents: int = 0
     owner_slot: int = 2
     repayment_method: str = ""
+    purchase_offset_cents: int = 0
+    balance_after_cents: int = 0
 
     @property
     def edit_note(self) -> str:
@@ -188,6 +190,16 @@ class Entry:
     def tax_note(self) -> str:
         if self.kind not in {"purchase", "personal_purchase"} or not self.debt_amount_cents:
             return ""
+        if self.purchase_offset_cents:
+            excess = self.byn_cents - self.purchase_offset_cents
+            return (
+                f"Расчёт покупки: {format_money(self.byn_cents)}; встречный долг погашен на "
+                f"{format_money(self.purchase_offset_cents)}; остаток покупки {format_money(excess)} − "
+                f"НДС {self.vat_rate}% ({format_money(self.vat_cents)}) − налог на прибыль "
+                f"{self.profit_tax_rate}% ({format_money(self.profit_tax_cents)}); зачтено в баланс "
+                f"{format_money(self.debt_amount_cents)}; итоговое взаимное сальдо "
+                f"{format_money(abs(self.balance_after_cents))}"
+            )
         return (
             f"Расчёт покупки собственника: {format_money(self.byn_cents)} − НДС {self.vat_rate}% "
             f"({format_money(self.vat_cents)}) − налог на прибыль {self.profit_tax_rate}% "
@@ -272,7 +284,9 @@ class Ledger:
                     profit_tax_cents INTEGER NOT NULL DEFAULT 0,
                     debt_amount_cents INTEGER NOT NULL DEFAULT 0,
                     owner_slot INTEGER NOT NULL DEFAULT 2,
-                    repayment_method TEXT NOT NULL DEFAULT ''
+                    repayment_method TEXT NOT NULL DEFAULT '',
+                    purchase_offset_cents INTEGER NOT NULL DEFAULT 0,
+                    balance_after_cents INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -292,6 +306,8 @@ class Ledger:
                 "debt_amount_cents": "ALTER TABLE entries ADD COLUMN debt_amount_cents INTEGER NOT NULL DEFAULT 0",
                 "owner_slot": "ALTER TABLE entries ADD COLUMN owner_slot INTEGER NOT NULL DEFAULT 2",
                 "repayment_method": "ALTER TABLE entries ADD COLUMN repayment_method TEXT NOT NULL DEFAULT ''",
+                "purchase_offset_cents": "ALTER TABLE entries ADD COLUMN purchase_offset_cents INTEGER NOT NULL DEFAULT 0",
+                "balance_after_cents": "ALTER TABLE entries ADD COLUMN balance_after_cents INTEGER NOT NULL DEFAULT 0",
             }
             for column, sql in migrations.items():
                 if column not in existing:
@@ -320,6 +336,7 @@ class Ledger:
             db.execute("UPDATE entries SET owner=? WHERE owner='Игорь'", (DEFAULT_OWNERS[0],))
             db.execute("UPDATE entries SET owner=? WHERE owner='Юра'", (DEFAULT_OWNERS[1],))
             self._backfill_tax_calculations(db)
+            self._recalculate_purchase_offsets(db)
 
     @staticmethod
     def _tax_calculation(amount_cents: int, vat: Decimal, profit: Decimal) -> tuple[int, int, int]:
@@ -341,6 +358,40 @@ class Ledger:
                 "UPDATE entries SET vat_rate=?, profit_tax_rate=?, vat_cents=?, profit_tax_cents=?, debt_amount_cents=? WHERE id=?",
                 (str(vat), str(profit), vat_cents, profit_cents, debt_cents, entry_id),
             )
+
+    def _recalculate_purchase_offsets(self, db: sqlite3.Connection) -> None:
+        """Пересчитывает покупки по хронологии: встречный долг гасится до налогов."""
+        current_balance = 0
+        rows = db.execute("SELECT * FROM entries ORDER BY operation_date, id").fetchall()
+        for row in rows:
+            kind = row["kind"]
+            mode = KINDS.get(kind, ("", "", 0, "debt"))[3]
+            if mode != "debt":
+                db.execute("UPDATE entries SET balance_after_cents=? WHERE id=?", (current_balance, row["id"]))
+                continue
+            raw_cents = row["amount_byn_cents"] or row["amount_cents"]
+            owner_direction = 1 if row["owner_slot"] == 2 else -1
+            direction = owner_direction * row["sign"]
+            impact_cents = row["debt_amount_cents"] or raw_cents
+            offset_cents = 0
+            if kind in {"purchase", "personal_purchase"}:
+                if current_balance and current_balance * direction < 0:
+                    offset_cents = min(raw_cents, abs(current_balance))
+                excess_cents = raw_cents - offset_cents
+                vat = Decimal(row["vat_rate"] or DEFAULT_VAT_RATE)
+                profit = Decimal(row["profit_tax_rate"] or DEFAULT_PROFIT_TAX_RATE)
+                vat_cents, profit_cents, net_excess = self._tax_calculation(excess_cents, vat, profit) if excess_cents else (0, 0, 0)
+                impact_cents = offset_cents + net_excess
+                db.execute(
+                    """UPDATE entries SET vat_rate=?, profit_tax_rate=?, vat_cents=?, profit_tax_cents=?,
+                    debt_amount_cents=?, purchase_offset_cents=? WHERE id=?""",
+                    (str(vat), str(profit), vat_cents, profit_cents, impact_cents, offset_cents, row["id"]),
+                )
+            elif kind in {"repayment_bank", "repayment_cash"}:
+                method = row["repayment_method"] or ("cash" if kind == "repayment_cash" else "account")
+                impact_cents = int((Decimal(raw_cents) / 2).quantize(Decimal("1"), rounding=ROUND_HALF_UP)) if method == "cash" else raw_cents
+            current_balance += impact_cents * direction
+            db.execute("UPDATE entries SET balance_after_cents=? WHERE id=?", (current_balance, row["id"]))
 
     def settings(self) -> dict[str, object]:
         with self.connect() as db:
@@ -456,6 +507,7 @@ class Ledger:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 prepared,
             )
+            self._recalculate_purchase_offsets(db)
             return int(cursor.lastrowid)
 
     def update(self, entry_id: int, **values) -> bool:
@@ -468,6 +520,7 @@ class Ledger:
                 (*prepared, entry_id),
             )
             if result.rowcount:
+                self._recalculate_purchase_offsets(db)
                 edited_at = datetime.now().astimezone().isoformat(timespec="seconds")
                 db.execute("INSERT INTO entry_edits(entry_id, edited_at) VALUES (?, ?)", (entry_id, edited_at))
             return result.rowcount > 0
@@ -487,6 +540,8 @@ class Ledger:
     def delete(self, entry_id: int) -> bool:
         with self.connect() as db:
             result = db.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
+            if result.rowcount:
+                self._recalculate_purchase_offsets(db)
             return result.rowcount > 0
 
     def list(self) -> list[Entry]:

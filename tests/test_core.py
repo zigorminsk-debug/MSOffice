@@ -23,9 +23,9 @@ def test_two_owner_debt_scenario(tmp_path):
     # Личная покупка Собственника 1 увеличивает его долг Собственнику 2 с учётом налогов.
     ledger.add(operation_date="2026-03-02", kind="personal_purchase", amount="15000", sign=1, owner="Собственник 1")
     result = ledger.summary()
-    assert result["debt"] == 7_500_000
-    assert result["owner1"] == 7_500_000
-    assert result["owner2"] == -7_500_000
+    assert result["debt"] == 7_000_000
+    assert result["owner1"] == 7_000_000
+    assert result["owner2"] == -7_000_000
 
 
 def test_usd_conversion_and_loan_deposits(tmp_path):
@@ -216,3 +216,32 @@ def test_repayment_cash_of_6666_leaves_half_debt(tmp_path):
     ledger.add(operation_date="2026-10-21", kind="repayment_cash", amount="66.66", sign=-1,
                owner="Собственник 2", currency="BYN", repayment_method="cash")
     assert ledger.summary()["debt"] == 3333
+
+
+def test_purchase_first_offsets_opposite_debt_then_taxes_only_excess(tmp_path):
+    ledger = Ledger(tmp_path / "offset-before-tax.db")
+    ledger.add(operation_date="2026-10-20", kind="credit", amount="100", sign=1,
+               owner="Собственник 2", currency="BYN")
+    purchase_id = ledger.add(operation_date="2026-10-21", kind="purchase", amount="150", sign=1,
+                             owner="Собственник 1", currency="BYN")
+    purchase = ledger.get(purchase_id)
+    assert purchase.purchase_offset_cents == 10_000
+    assert purchase.vat_cents == 833
+    assert purchase.profit_tax_cents == 833
+    assert purchase.debt_amount_cents == 13_334
+    assert purchase.balance_after_cents == -3_334
+    assert ledger.summary()["debt"] == -3_334
+    assert "встречный долг погашен на 100,00 Br" in purchase.tax_note
+    assert "остаток покупки 50,00 Br" in purchase.tax_note
+
+
+def test_backdated_change_recalculates_later_purchase_offset(tmp_path):
+    ledger = Ledger(tmp_path / "offset-recalc.db")
+    purchase_id = ledger.add(operation_date="2026-10-21", kind="purchase", amount="150", sign=1,
+                             owner="Собственник 1", currency="BYN")
+    assert ledger.get(purchase_id).debt_amount_cents == 10_000
+    debt_id = ledger.add(operation_date="2026-10-20", kind="credit", amount="100", sign=1,
+                         owner="Собственник 2", currency="BYN")
+    assert ledger.get(purchase_id).debt_amount_cents == 13_334
+    ledger.delete(debt_id)
+    assert ledger.get(purchase_id).debt_amount_cents == 10_000

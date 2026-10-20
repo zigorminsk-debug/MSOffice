@@ -327,7 +327,16 @@ class BalanceGUI(tk.Tk):
         calculator_total = 0
         for item in entries:
             if item.mode == "debt":
-                effect = (f"{self.ledger.owners[1]} → {to_dative(self.ledger.owners[0])}" if item.effect_cents > 0 else f"{self.ledger.owners[0]} → {to_dative(self.ledger.owners[1])}") + f" {format_money(abs(item.effect_cents))}"
+                if item.purchase_offset_cents:
+                    if item.balance_after_cents > 0:
+                        resulting = f"{self.ledger.owners[1]} → {to_dative(self.ledger.owners[0])} {format_money(item.balance_after_cents)}"
+                    elif item.balance_after_cents < 0:
+                        resulting = f"{self.ledger.owners[0]} → {to_dative(self.ledger.owners[1])} {format_money(-item.balance_after_cents)}"
+                    else:
+                        resulting = "долг закрыт"
+                    effect = f"Погашено {format_money(item.purchase_offset_cents)}; новый итог: {resulting}"
+                else:
+                    effect = (f"{self.ledger.owners[1]} → {to_dative(self.ledger.owners[0])}" if item.effect_cents > 0 else f"{self.ledger.owners[0]} → {to_dative(self.ledger.owners[1])}") + f" {format_money(abs(item.effect_cents))}"
                 tag = "plus" if item.effect_cents > 0 else "minus"
             else:
                 effect = f"Депозит {'+' if item.deposit_effect_cents > 0 else '−'} {format_money(abs(item.deposit_effect_cents))}"

@@ -78,3 +78,18 @@ def test_web_cash_repayment_shows_half_calculation(tmp_path):
                            follow_redirects=True)
     assert "Расчёты закрыты".encode("utf-8") in response.data
     assert "133,32 Br ÷ 2 = уменьшение долга 66,66 Br".encode("utf-8") in response.data
+
+
+def test_web_purchase_offsets_gross_debt_before_taxing_excess(tmp_path):
+    app = create_app(tmp_path / "purchase-offset-web.db")
+    app.config.update(TESTING=True)
+    client = app.test_client()
+    client.post("/entries", data={"operation_date": "2026-10-20", "kind": "credit", "amount": "100",
+                                          "sign": "1", "owner": "Собственник 2", "currency": "BYN"})
+    response = client.post("/entries", data={"operation_date": "2026-10-21", "kind": "purchase", "amount": "150",
+                                             "sign": "1", "owner": "Собственник 1", "currency": "BYN"},
+                           follow_redirects=True)
+    assert "Собственник 1 должен Собственнику 2".encode("utf-8") in response.data
+    assert "33,34 Br".encode("utf-8") in response.data
+    assert "Погашено 100,00 Br".encode("utf-8") in response.data
+    assert "остаток покупки 50,00 Br".encode("utf-8") in response.data
