@@ -145,10 +145,10 @@ class BalanceGUI(tk.Tk):
 
         form = tk.LabelFrame(self, text="  Новая операция  ", bg="#fff", fg="#16221d", font=("Segoe UI", 10, "bold"), padx=14, pady=10)
         form.pack(fill="x", padx=20, pady=(16, 8))
-        names = ("date", "owner", "kind", "sign", "amount", "currency", "rate", "reference", "deposit_source", "from", "to", "description")
+        names = ("date", "owner", "kind", "sign", "amount", "currency", "rate", "reference", "deposit_source", "payment_method", "from", "to", "description")
         self.vars = {name: tk.StringVar() for name in names}
         self.vars.update({"date": tk.StringVar(value=date.today().isoformat()), "owner": tk.StringVar(value=self.ledger.owners[1]),
-                          "sign": tk.StringVar(value="+"), "currency": tk.StringVar(value="BYN")})
+                          "sign": tk.StringVar(value="+"), "currency": tk.StringVar(value="BYN"), "payment_method": tk.StringVar(value="Со счёта")})
         self.kind_labels = {f"{value[1]} · {value[0]}": code for code, value in KINDS.items()}
         self.vars["kind"].set(next(iter(self.kind_labels)))
 
@@ -177,7 +177,8 @@ class BalanceGUI(tk.Tk):
         self.save_button = ttk.Button(form, text="Добавить", command=self.add)
         self.save_button.grid(row=1, column=7, padx=4, pady=(18, 3), sticky="ew")
         self.deposit_source_box = field("Источник депозита / от кого получены деньги", "deposit_source", 2, 0, span=4, values=self.ledger.parties, width=36)
-        tk.Label(form, text="Для внесения и расхода выберите одинакового собственника или фирму из настроек", bg="#fff", fg="#7b8780", font=("Segoe UI", 8)).grid(row=2, column=4, columnspan=4, sticky="w", padx=6, pady=(18, 0))
+        self.payment_method_box = field("Путь возврата долга", "payment_method", 2, 4, span=2, values=["Со счёта", "Наличными"], width=18)
+        tk.Label(form, text="Со счёта — вся сумма; наличными — сумма делится на 2", bg="#fff", fg="#7b8780", font=("Segoe UI", 8), wraplength=260, justify="left").grid(row=2, column=6, columnspan=2, sticky="w", padx=6, pady=(18, 0))
         self.editing_id: int | None = None
         self.edit_note_label = tk.Label(form, text="", bg="#fff", fg="#7b5b24", font=("Segoe UI", 8, "bold"), anchor="w")
         self.edit_note_label.grid(row=3, column=0, columnspan=8, sticky="ew", padx=4, pady=(5, 0))
@@ -213,6 +214,8 @@ class BalanceGUI(tk.Tk):
     def _preset_sign(self, _event=None) -> None:
         code = self.kind_labels[self.vars["kind"].get()]
         self.vars["sign"].set("+" if KINDS[code][2] > 0 else "−")
+        if code == "repayment_bank": self.vars["payment_method"].set("Со счёта")
+        elif code == "repayment_cash": self.vars["payment_method"].set("Наличными")
 
     def _form_values(self) -> dict:
         return {
@@ -223,6 +226,7 @@ class BalanceGUI(tk.Tk):
             "owner": self.vars["owner"].get(), "currency": self.vars["currency"].get(),
             "fx_rate": self.vars["rate"].get(), "reference_rate": self.vars["reference"].get(),
             "deposit_source": self.vars["deposit_source"].get(),
+            "repayment_method": "cash" if self.vars["payment_method"].get() == "Наличными" else "account",
             "from_party": self.vars["from"].get(), "to_party": self.vars["to"].get(),
             "description": self.vars["description"].get(),
         }
@@ -241,6 +245,7 @@ class BalanceGUI(tk.Tk):
     def _reset_form(self) -> None:
         for key in ("amount", "rate", "reference", "deposit_source", "from", "to", "description"):
             self.vars[key].set("")
+        self.vars["payment_method"].set("Со счёта")
         self.editing_id = None
         self.save_button.config(text="Добавить")
         self.edit_note_label.config(text="")
@@ -282,12 +287,12 @@ class BalanceGUI(tk.Tk):
             return
         self._tooltip_row = row_id
         entry = self.ledger.get(int(row_id))
-        if not entry or not entry.tax_note:
+        if not entry or not entry.calculation_note:
             return
         popup = tk.Toplevel(self)
         popup.wm_overrideredirect(True)
         popup.wm_geometry(f"+{self.winfo_pointerx()+14}+{self.winfo_pointery()+14}")
-        tk.Label(popup, text=entry.tax_note, bg="#fff6cc", fg="#352d18", relief="solid", borderwidth=1,
+        tk.Label(popup, text=entry.calculation_note, bg="#fff6cc", fg="#352d18", relief="solid", borderwidth=1,
                  padx=10, pady=7, wraplength=560, justify="left").pack()
         self._tooltip = popup
 
@@ -306,6 +311,7 @@ class BalanceGUI(tk.Tk):
         self.vars["rate"].set(item.fx_rate if item.currency == "USD" or item.reference_rate else "")
         self.vars["reference"].set(item.reference_rate)
         self.vars["deposit_source"].set(item.deposit_source)
+        self.vars["payment_method"].set("Наличными" if item.effective_repayment_method == "cash" else "Со счёта")
         self.vars["from"].set(item.from_party); self.vars["to"].set(item.to_party)
         self.vars["description"].set(item.description)
         self.editing_id = item.id
@@ -333,8 +339,8 @@ class BalanceGUI(tk.Tk):
             elif item.currency == "USD":
                 original += f" @ {item.fx_rate}"
             note = item.description
-            if item.tax_note:
-                note = f"ⓘ {note}" if note else "ⓘ Наведите для расчёта налогов"
+            if item.calculation_note:
+                note = f"ⓘ {note}" if note else "ⓘ Наведите для расчёта"
             if item.edit_note:
                 note = f"{note}  |  {item.edit_note}" if note else item.edit_note
             tags = [tag]

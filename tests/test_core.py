@@ -183,3 +183,36 @@ def test_existing_goods_purchase_gets_tax_backfill(tmp_path):
     entry = reopened.list()[0]
     assert entry.debt_amount_cents == 6666
     assert reopened.summary()["debt"] == 6666
+
+
+def test_repayment_account_uses_full_amount_and_closes_debt(tmp_path):
+    ledger = Ledger(tmp_path / "repayment-account.db")
+    ledger.add(operation_date="2026-10-20", kind="purchase", amount="100", sign=1,
+               owner="Собственник 2", currency="BYN")
+    repayment_id = ledger.add(operation_date="2026-10-21", kind="repayment_bank", amount="66.66", sign=-1,
+                              owner="Собственник 2", currency="BYN", repayment_method="account")
+    repayment = ledger.get(repayment_id)
+    assert repayment.balance_amount_cents == 6666
+    assert "полную сумму 66,66 Br" in repayment.repayment_note
+    assert ledger.summary()["debt"] == 0
+
+
+def test_repayment_cash_uses_half_amount_and_closes_debt(tmp_path):
+    ledger = Ledger(tmp_path / "repayment-cash.db")
+    ledger.add(operation_date="2026-10-20", kind="purchase", amount="100", sign=1,
+               owner="Собственник 2", currency="BYN")
+    repayment_id = ledger.add(operation_date="2026-10-21", kind="repayment_cash", amount="133.32", sign=-1,
+                              owner="Собственник 2", currency="BYN", repayment_method="cash")
+    repayment = ledger.get(repayment_id)
+    assert repayment.balance_amount_cents == 6666
+    assert "133,32 Br ÷ 2" in repayment.repayment_note
+    assert ledger.summary()["debt"] == 0
+
+
+def test_repayment_cash_of_6666_leaves_half_debt(tmp_path):
+    ledger = Ledger(tmp_path / "repayment-cash-half.db")
+    ledger.add(operation_date="2026-10-20", kind="purchase", amount="100", sign=1,
+               owner="Собственник 2", currency="BYN")
+    ledger.add(operation_date="2026-10-21", kind="repayment_cash", amount="66.66", sign=-1,
+               owner="Собственник 2", currency="BYN", repayment_method="cash")
+    assert ledger.summary()["debt"] == 3333

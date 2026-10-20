@@ -127,6 +127,7 @@ class Entry:
     profit_tax_cents: int = 0
     debt_amount_cents: int = 0
     owner_slot: int = 2
+    repayment_method: str = ""
 
     @property
     def edit_note(self) -> str:
@@ -152,11 +153,36 @@ class Entry:
         if self.mode != "debt":
             return 0
         owner_direction = 1 if self.owner_slot == 2 else -1
-        return self.settlement_cents * self.sign * owner_direction
+        return self.balance_amount_cents * self.sign * owner_direction
 
     @property
     def settlement_cents(self) -> int:
         return self.debt_amount_cents or self.byn_cents
+
+    @property
+    def effective_repayment_method(self) -> str:
+        if self.repayment_method in {"account", "cash"}:
+            return self.repayment_method
+        return "cash" if self.kind == "repayment_cash" else "account"
+
+    @property
+    def balance_amount_cents(self) -> int:
+        amount = self.settlement_cents
+        if self.kind in {"repayment_bank", "repayment_cash"} and self.effective_repayment_method == "cash":
+            return int((Decimal(amount) / 2).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        return amount
+
+    @property
+    def repayment_note(self) -> str:
+        if self.kind not in {"repayment_bank", "repayment_cash"}:
+            return ""
+        if self.effective_repayment_method == "cash":
+            return f"Погашение наличными: {format_money(self.byn_cents)} ÷ 2 = уменьшение долга {format_money(self.balance_amount_cents)}"
+        return f"Погашение со счёта: уменьшение долга на полную сумму {format_money(self.balance_amount_cents)}"
+
+    @property
+    def calculation_note(self) -> str:
+        return self.tax_note or self.repayment_note
 
     @property
     def tax_note(self) -> str:
@@ -245,7 +271,8 @@ class Ledger:
                     vat_cents INTEGER NOT NULL DEFAULT 0,
                     profit_tax_cents INTEGER NOT NULL DEFAULT 0,
                     debt_amount_cents INTEGER NOT NULL DEFAULT 0,
-                    owner_slot INTEGER NOT NULL DEFAULT 2
+                    owner_slot INTEGER NOT NULL DEFAULT 2,
+                    repayment_method TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
@@ -264,6 +291,7 @@ class Ledger:
                 "profit_tax_cents": "ALTER TABLE entries ADD COLUMN profit_tax_cents INTEGER NOT NULL DEFAULT 0",
                 "debt_amount_cents": "ALTER TABLE entries ADD COLUMN debt_amount_cents INTEGER NOT NULL DEFAULT 0",
                 "owner_slot": "ALTER TABLE entries ADD COLUMN owner_slot INTEGER NOT NULL DEFAULT 2",
+                "repayment_method": "ALTER TABLE entries ADD COLUMN repayment_method TEXT NOT NULL DEFAULT ''",
             }
             for column, sql in migrations.items():
                 if column not in existing:
@@ -355,7 +383,7 @@ class Ledger:
         sign: int | str, owner: str = "Собственник 2", currency: str = "BYN",
         fx_rate: str | Decimal | None = None,
         reference_rate: str | Decimal | None = None, deposit_source: str = "",
-        from_party: str = "", to_party: str = "", description: str = "",
+        repayment_method: str = "", from_party: str = "", to_party: str = "", description: str = "",
     ) -> tuple:
         if kind not in KINDS:
             raise ValueError("Неизвестный вид операции")
@@ -370,6 +398,11 @@ class Ledger:
         sign_int = int(sign)
         if sign_int not in (-1, 1):
             raise ValueError("Знак должен быть + или −")
+        repayment = repayment_method.strip().lower()
+        if repayment not in {"", "account", "cash"}:
+            raise ValueError("Выберите путь возврата: со счёта или наличными")
+        if kind in {"repayment_bank", "repayment_cash"} and not repayment:
+            repayment = "cash" if kind == "repayment_cash" else "account"
         cents = money_to_cents(amount) if not isinstance(amount, int) else amount
         if cents <= 0:
             raise ValueError("Сумма должна быть больше нуля")
@@ -410,7 +443,7 @@ class Ledger:
             operation_date, kind, cents, sign_int, from_party.strip(), to_party.strip(),
             description.strip(), owner, currency, str(rate), byn_cents,
             str(reference) if reference is not None else "", fx_difference, source,
-            vat_rate, profit_rate, vat_cents, profit_tax_cents, debt_amount_cents, self.owners.index(owner) + 1,
+            vat_rate, profit_rate, vat_cents, profit_tax_cents, debt_amount_cents, self.owners.index(owner) + 1, repayment,
         )
 
     def add(self, **values) -> int:
@@ -419,8 +452,8 @@ class Ledger:
             cursor = db.execute(
                 """INSERT INTO entries
                 (operation_date, kind, amount_cents, sign, from_party, to_party, description,
-                 owner, currency, fx_rate, amount_byn_cents, reference_rate, fx_difference_cents, deposit_source, vat_rate, profit_tax_rate, vat_cents, profit_tax_cents, debt_amount_cents, owner_slot)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 owner, currency, fx_rate, amount_byn_cents, reference_rate, fx_difference_cents, deposit_source, vat_rate, profit_tax_rate, vat_cents, profit_tax_cents, debt_amount_cents, owner_slot, repayment_method)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 prepared,
             )
             return int(cursor.lastrowid)
@@ -431,7 +464,7 @@ class Ledger:
             result = db.execute(
                 """UPDATE entries SET operation_date=?, kind=?, amount_cents=?, sign=?,
                 from_party=?, to_party=?, description=?, owner=?, currency=?, fx_rate=?,
-                amount_byn_cents=?, reference_rate=?, fx_difference_cents=?, deposit_source=?, vat_rate=?, profit_tax_rate=?, vat_cents=?, profit_tax_cents=?, debt_amount_cents=?, owner_slot=? WHERE id=?""",
+                amount_byn_cents=?, reference_rate=?, fx_difference_cents=?, deposit_source=?, vat_rate=?, profit_tax_rate=?, vat_cents=?, profit_tax_cents=?, debt_amount_cents=?, owner_slot=?, repayment_method=? WHERE id=?""",
                 (*prepared, entry_id),
             )
             if result.rowcount:
@@ -481,8 +514,8 @@ class Ledger:
             "owner2": -debt,
             "incoming": sum(item.byn_cents for item in entries if item.section == "Приход"),
             "expenses": sum(item.byn_cents for item in entries if item.section == "Расход"),
-            "repayments": sum(item.byn_cents for item in entries if item.mode == "debt" and item.sign < 0),
-            "increases": sum(item.byn_cents for item in entries if item.mode == "debt" and item.sign > 0),
+            "repayments": sum(item.balance_amount_cents for item in entries if item.mode == "debt" and item.sign < 0),
+            "increases": sum(item.balance_amount_cents for item in entries if item.mode == "debt" and item.sign > 0),
             "owner1_deposit": sum(item.deposit_effect_cents for item in entries if item.owner == self.owners[0]),
             "owner2_deposit": sum(item.deposit_effect_cents for item in entries if item.owner == self.owners[1]),
             "fx_difference": sum(item.fx_difference_cents for item in entries),
@@ -562,6 +595,7 @@ class Ledger:
                     fx_rate=value(row, "Курс получения", "Курс НБРБ", "Курс", "Rate"),
                     reference_rate=value(row, "Курс внесения", "Исходный курс", "Reference rate"),
                     deposit_source=value(row, "Источник депозита", "Депозит от", "Deposit source"),
+                    repayment_method={"со счёта": "account", "счет": "account", "счёт": "account", "account": "account", "наличными": "cash", "нал": "cash", "cash": "cash"}.get(value(row, "Путь возврата", "Способ возврата", "Repayment method").lower(), ""),
                     from_party=value(row, "От кого", "From"), to_party=value(row, "Кому", "To"),
                     description=value(row, "Пояснение", "Описание", "Description"),
                 ))
@@ -578,8 +612,8 @@ class Ledger:
             db.executemany(
                 """INSERT INTO entries
                 (operation_date, kind, amount_cents, sign, from_party, to_party, description,
-                 owner, currency, fx_rate, amount_byn_cents, reference_rate, fx_difference_cents, deposit_source, vat_rate, profit_tax_rate, vat_cents, profit_tax_cents, debt_amount_cents, owner_slot)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 owner, currency, fx_rate, amount_byn_cents, reference_rate, fx_difference_cents, deposit_source, vat_rate, profit_tax_rate, vat_cents, profit_tax_cents, debt_amount_cents, owner_slot, repayment_method)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 prepared,
             )
         return len(prepared)
@@ -590,7 +624,7 @@ class Ledger:
             writer = csv.writer(stream, delimiter=";")
             writer.writerow(["Дата", "Раздел", "Операция", "Баланс", "Знак", "Сумма", "Валюта",
                              "Курс внесения", "Курс получения", "Получено BYN", "Курсовая разница",
-                             "Источник депозита", "От кого", "Кому", "Пояснение", "Примечание редактирования",
+                             "Источник депозита", "Путь возврата", "От кого", "Кому", "Пояснение", "Примечание редактирования",
                              "НДС", "Налог на прибыль", "Расчётный долг", "Изменение взаимного долга", "Изменение депозита займа"])
             for item in reversed(self.list()):
                 writer.writerow([
@@ -599,9 +633,9 @@ class Ledger:
                     item.currency, item.reference_rate, item.fx_rate,
                     f"{Decimal(item.byn_cents) / 100:.2f}",
                     f"{Decimal(item.fx_difference_cents) / 100:.2f}",
-                    item.deposit_source, item.from_party, item.to_party, item.description, item.edit_note,
+                    item.deposit_source, ("Наличными" if item.effective_repayment_method == "cash" else "Со счёта") if item.kind in {"repayment_bank", "repayment_cash"} else "", item.from_party, item.to_party, item.description, item.edit_note,
                     f"{Decimal(item.vat_cents) / 100:.2f}", f"{Decimal(item.profit_tax_cents) / 100:.2f}",
-                    f"{Decimal(item.settlement_cents) / 100:.2f}",
+                    f"{Decimal(item.balance_amount_cents) / 100:.2f}",
                     f"{Decimal(item.effect_cents) / 100:.2f}",
                     f"{Decimal(item.deposit_effect_cents) / 100:.2f}",
                 ])

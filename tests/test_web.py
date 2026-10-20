@@ -64,3 +64,17 @@ def test_web_personal_purchase_tooltip_and_settings(tmp_path):
     assert 'долг 66,66 Br'.encode("utf-8") in result.data
     assert b'class="tax-row"' in result.data
     assert "Второй должен Первому".encode("utf-8") in result.data
+
+
+def test_web_cash_repayment_shows_half_calculation(tmp_path):
+    app = create_app(tmp_path / "cash-web.db")
+    app.config.update(TESTING=True)
+    client = app.test_client()
+    common = {"owner": "Собственник 2", "currency": "BYN", "from_party": "", "to_party": ""}
+    client.post("/entries", data={**common, "operation_date": "2026-10-20", "kind": "purchase",
+                                  "amount": "100", "sign": "1"})
+    response = client.post("/entries", data={**common, "operation_date": "2026-10-21", "kind": "repayment_cash",
+                                             "amount": "133.32", "sign": "-1", "repayment_method": "cash"},
+                           follow_redirects=True)
+    assert "Расчёты закрыты".encode("utf-8") in response.data
+    assert "133,32 Br ÷ 2 = уменьшение долга 66,66 Br".encode("utf-8") in response.data

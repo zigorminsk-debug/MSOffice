@@ -93,6 +93,7 @@ def create_app(
                 fx_rate=request.form.get("fx_rate", ""),
                 reference_rate=request.form.get("reference_rate", ""),
                 deposit_source=request.form.get("deposit_source", ""),
+                repayment_method=request.form.get("repayment_method", ""),
                 from_party=request.form.get("from_party", ""),
                 to_party=request.form.get("to_party", ""),
                 description=request.form.get("description", ""),
@@ -118,6 +119,7 @@ def create_app(
                     currency=request.form.get("currency", "BYN"), fx_rate=request.form.get("fx_rate", ""),
                     reference_rate=request.form.get("reference_rate", ""),
                     deposit_source=request.form.get("deposit_source", ""),
+                    repayment_method=request.form.get("repayment_method", ""),
                     from_party=request.form.get("from_party", ""), to_party=request.form.get("to_party", ""),
                     description=request.form.get("description", ""),
                 )
