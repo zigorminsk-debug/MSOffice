@@ -38,7 +38,7 @@ class BalanceGUI(tk.Tk):
             return
         self.ledger, self.database_security = unlocked
         self.security.set_database(selected_db)
-        self.title("Fitnes — баланс Игоря и Юры")
+        self.title("Fitnes — баланс собственников")
         self.geometry("1280x800")
         self.minsize(980, 650)
         self.configure(bg="#f1f4f0")
@@ -136,7 +136,7 @@ class BalanceGUI(tk.Tk):
         self._refresh_database_selector()
         self.database_selector.bind("<<ComboboxSelected>>", self._switch_database_event)
         self.database_selector.pack(side="left", padx=5)
-        ttk.Button(actions, text="Базы и пароли", command=self.configure_access).pack(side="left", padx=5)
+        ttk.Button(actions, text="Настройки", command=self.configure_access).pack(side="left", padx=5)
         ttk.Button(actions, text="Инструкция", command=self.show_help).pack(side="left", padx=5)
         ttk.Button(actions, text="HTML-интерфейс", command=self.open_web).pack(side="left", padx=5)
         ttk.Button(actions, text="Импорт CSV", command=self.import_csv).pack(side="left", padx=5)
@@ -146,7 +146,7 @@ class BalanceGUI(tk.Tk):
         form.pack(fill="x", padx=20, pady=(16, 8))
         names = ("date", "owner", "kind", "sign", "amount", "currency", "rate", "reference", "deposit_source", "from", "to", "description")
         self.vars = {name: tk.StringVar() for name in names}
-        self.vars.update({"date": tk.StringVar(value=date.today().isoformat()), "owner": tk.StringVar(value="Юра"),
+        self.vars.update({"date": tk.StringVar(value=date.today().isoformat()), "owner": tk.StringVar(value=self.ledger.owners[1]),
                           "sign": tk.StringVar(value="+"), "currency": tk.StringVar(value="BYN")})
         self.kind_labels = {f"{value[1]} · {value[0]}": code for code, value in KINDS.items()}
         self.vars["kind"].set(next(iter(self.kind_labels)))
@@ -162,7 +162,7 @@ class BalanceGUI(tk.Tk):
             return widget
 
         field("Дата", "date", 0, 0)
-        field("На чей баланс", "owner", 0, 1, values=["Игорь", "Юра"])
+        self.owner_box = field("На чей баланс", "owner", 0, 1, values=self.ledger.owners)
         kind_box = field("Операция", "kind", 0, 2, span=2, values=list(self.kind_labels), width=30)
         kind_box.bind("<<ComboboxSelected>>", self._preset_sign)
         field("Действие", "sign", 0, 4, values=["+", "−"])
@@ -170,13 +170,13 @@ class BalanceGUI(tk.Tk):
         field("Валюта", "currency", 0, 6, values=["BYN", "USD"], width=8)
         field("Курс получения / USD", "rate", 0, 7, width=20)
         field("Курс внесения", "reference", 1, 0)
-        field("От кого", "from", 1, 1, span=2)
-        field("Кому", "to", 1, 3, span=2)
+        self.from_box = field("От кого", "from", 1, 1, span=2, values=self.ledger.parties)
+        self.to_box = field("Кому", "to", 1, 3, span=2, values=self.ledger.parties)
         field("Пояснение", "description", 1, 5, span=2, width=30)
         self.save_button = ttk.Button(form, text="Добавить", command=self.add)
         self.save_button.grid(row=1, column=7, padx=4, pady=(18, 3), sticky="ew")
-        field("Источник депозита / от кого получены деньги", "deposit_source", 2, 0, span=4, width=36)
-        tk.Label(form, text="Для внесения и расхода из депозита укажите одинаковое имя: Юра, Игорь, ООО…", bg="#fff", fg="#7b8780", font=("Segoe UI", 8)).grid(row=2, column=4, columnspan=4, sticky="w", padx=6, pady=(18, 0))
+        self.deposit_source_box = field("Источник депозита / от кого получены деньги", "deposit_source", 2, 0, span=4, values=self.ledger.parties, width=36)
+        tk.Label(form, text="Для внесения и расхода выберите одинакового собственника или фирму из настроек", bg="#fff", fg="#7b8780", font=("Segoe UI", 8)).grid(row=2, column=4, columnspan=4, sticky="w", padx=6, pady=(18, 0))
         self.editing_id: int | None = None
         self.edit_note_label = tk.Label(form, text="", bg="#fff", fg="#7b5b24", font=("Segoe UI", 8, "bold"), anchor="w")
         self.edit_note_label.grid(row=3, column=0, columnspan=8, sticky="ew", padx=4, pady=(5, 0))
@@ -200,6 +200,10 @@ class BalanceGUI(tk.Tk):
         ttk.Button(bottom, text="Удалить выбранную запись", command=self.delete_selected).pack(side="right")
         ttk.Button(bottom, text="Редактировать выбранную", command=self.edit_selected).pack(side="right", padx=6)
         self.table.bind("<Double-Button-1>", self._on_table_double_click)
+        self.table.bind("<Motion>", self._show_row_tooltip)
+        self.table.bind("<Leave>", self._hide_row_tooltip)
+        self._tooltip = None
+        self._tooltip_row = ""
         self.db_path_label = tk.Label(bottom, text=f"База: {self.ledger.db_path}", bg="#f1f4f0", fg="#7b8780", font=("Segoe UI", 8))
         self.db_path_label.pack(side="left")
         self.calculator_label = tk.Label(bottom, text="Калькулятор: Ctrl+клик по ячейке «Исходная сумма»", bg="#f1f4f0", fg="#1e6849", font=("Segoe UI", 9, "bold"))
@@ -262,6 +266,30 @@ class BalanceGUI(tk.Tk):
             self.after_idle(self.edit_selected)
         return "break"
 
+    def _hide_row_tooltip(self, _event=None) -> None:
+        if self._tooltip:
+            self._tooltip.destroy()
+            self._tooltip = None
+        self._tooltip_row = ""
+
+    def _show_row_tooltip(self, event) -> None:
+        row_id = self.table.identify_row(event.y)
+        if row_id == self._tooltip_row:
+            return
+        self._hide_row_tooltip()
+        if not row_id:
+            return
+        self._tooltip_row = row_id
+        entry = self.ledger.get(int(row_id))
+        if not entry or not entry.tax_note:
+            return
+        popup = tk.Toplevel(self)
+        popup.wm_overrideredirect(True)
+        popup.wm_geometry(f"+{self.winfo_pointerx()+14}+{self.winfo_pointery()+14}")
+        tk.Label(popup, text=entry.tax_note, bg="#fff6cc", fg="#352d18", relief="solid", borderwidth=1,
+                 padx=10, pady=7, wraplength=560, justify="left").pack()
+        self._tooltip = popup
+
     def edit_selected(self) -> None:
         selected = self.table.selection()
         if not selected:
@@ -292,7 +320,7 @@ class BalanceGUI(tk.Tk):
         calculator_total = 0
         for item in entries:
             if item.mode == "debt":
-                effect = ("Юра → Игорю" if item.effect_cents > 0 else "Игорь → Юре") + f" {format_money(abs(item.effect_cents))}"
+                effect = (f"{self.ledger.owners[1]} → {self.ledger.owners[0]}" if item.effect_cents > 0 else f"{self.ledger.owners[0]} → {self.ledger.owners[1]}") + f" {format_money(abs(item.effect_cents))}"
                 tag = "plus" if item.effect_cents > 0 else "minus"
             else:
                 effect = f"Депозит {'+' if item.deposit_effect_cents > 0 else '−'} {format_money(abs(item.deposit_effect_cents))}"
@@ -304,6 +332,8 @@ class BalanceGUI(tk.Tk):
             elif item.currency == "USD":
                 original += f" @ {item.fx_rate}"
             note = item.description
+            if item.tax_note:
+                note = f"ⓘ {note}" if note else "ⓘ Наведите для расчёта налогов"
             if item.edit_note:
                 note = f"{note}  |  {item.edit_note}" if note else item.edit_note
             tags = [tag]
@@ -329,11 +359,11 @@ class BalanceGUI(tk.Tk):
         else:
             self.deposit_banner.pack_forget()
         summary = self.ledger.summary()
-        if summary["debt"] > 0: title, value = "Юра должен Игорю", summary["debt"]
-        elif summary["debt"] < 0: title, value = "Игорь должен Юре", -summary["debt"]
+        if summary["debt"] > 0: title, value = f"{self.ledger.owners[1]} должен {self.ledger.owners[0]}", summary["debt"]
+        elif summary["debt"] < 0: title, value = f"{self.ledger.owners[0]} должен {self.ledger.owners[1]}", -summary["debt"]
         else: title, value = "Расчёты закрыты", 0
         self.debt_title.config(text=title); self.debt_value.config(text=format_money(value))
-        self.stats.config(text=f"Приход: {format_money(summary['incoming'])}   Расходы: {format_money(summary['expenses'])}   Курсовая разница: {format_money(summary['fx_difference'])}   Депозит Игоря: {format_money(summary['igor_deposit'])}   Депозит Юры: {format_money(summary['yura_deposit'])}")
+        self.stats.config(text=f"Приход: {format_money(summary['incoming'])}   Расходы: {format_money(summary['expenses'])}   Курсовая разница: {format_money(summary['fx_difference'])}   Депозит {self.ledger.owners[0]}: {format_money(summary['owner1_deposit'])}   Депозит {self.ledger.owners[1]}: {format_money(summary['owner2_deposit'])}")
 
     def delete_selected(self) -> None:
         selected = self.table.selection()
@@ -374,6 +404,12 @@ class BalanceGUI(tk.Tk):
         if current_name in self.db_name_to_path:
             self.database_selector.set(current_name)
 
+    def _refresh_party_boxes(self) -> None:
+        self.owner_box["values"] = self.ledger.owners
+        self.vars["owner"].set(self.ledger.owners[1])
+        for box in (self.from_box, self.to_box, self.deposit_source_box):
+            box["values"] = self.ledger.parties
+
     def _switch_database_event(self, _event=None) -> None:
         selected_name = self.database_selector.get()
         path = self.db_name_to_path.get(selected_name)
@@ -387,12 +423,13 @@ class BalanceGUI(tk.Tk):
         self.calculator_ids.clear()
         self.security.set_database(path, selected_name)
         self.db_path_label.config(text=f"База: {self.ledger.db_path}")
+        self._refresh_party_boxes()
         self.refresh()
 
     def configure_access(self) -> None:
         window = tk.Toplevel(self)
-        window.title("Fitnes — базы и пароли")
-        window.geometry("740x600")
+        window.title("Fitnes — настройки")
+        window.geometry("780x820")
         window.resizable(False, False)
         window.configure(bg="#fff")
         path_var = tk.StringVar(value=str(self.ledger.db_path))
@@ -400,7 +437,10 @@ class BalanceGUI(tk.Tk):
         network_var = tk.BooleanVar(value=self.security.network_access)
         app_password = tk.StringVar(); app_confirm = tk.StringVar()
         db_password = tk.StringVar(); db_confirm = tk.StringVar()
-        tk.Label(window, text="Базы и пароли Fitnes", bg="#16221d", fg="white", font=("Segoe UI", 16, "bold"), padx=22, pady=16).pack(fill="x")
+        current_settings = self.ledger.settings()
+        owner1_var = tk.StringVar(value=str(current_settings["owner1"])); owner2_var = tk.StringVar(value=str(current_settings["owner2"]))
+        vat_var = tk.StringVar(value=str(current_settings["vat_rate"])); profit_var = tk.StringVar(value=str(current_settings["profit_tax_rate"]))
+        tk.Label(window, text="Настройки Fitnes", bg="#16221d", fg="white", font=("Segoe UI", 16, "bold"), padx=22, pady=16).pack(fill="x")
         body = tk.Frame(window, bg="#fff", padx=24, pady=16); body.pack(fill="both", expand=True)
 
         tk.Label(body, text="База данных", bg="#fff", fg="#1f3027", font=("Segoe UI", 11, "bold")).pack(anchor="w")
@@ -423,6 +463,19 @@ class BalanceGUI(tk.Tk):
         ttk.Button(buttons, text="Создать новую…", command=create_new).pack(side="left")
         tk.Label(body, text="Можно указать сетевой путь: \\SERVER\Share\fitnes.db", bg="#fff", fg="#758179", font=("Segoe UI", 8)).pack(anchor="w", padx=(80, 0))
         ttk.Checkbutton(body, text="Разрешить защищённый HTML-доступ из локальной сети", variable=network_var).pack(anchor="w", pady=(12, 14))
+
+        ttk.Separator(body).pack(fill="x", pady=4)
+        tk.Label(body, text="Собственники, фирмы и налоги", bg="#fff", fg="#1f3027", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(8, 3))
+        owners_row = tk.Frame(body, bg="#fff"); owners_row.pack(fill="x", pady=3)
+        ttk.Entry(owners_row, textvariable=owner1_var).pack(side="left", fill="x", expand=True, padx=(0, 6))
+        ttk.Entry(owners_row, textvariable=owner2_var).pack(side="left", fill="x", expand=True)
+        tk.Label(body, text="Имена собственников. Их порядок определяет две стороны общего баланса.", bg="#fff", fg="#758179", font=("Segoe UI", 8)).pack(anchor="w")
+        firms_text = tk.Text(body, height=4, font=("Segoe UI", 9)); firms_text.pack(fill="x", pady=(5, 2))
+        firms_text.insert("1.0", "\n".join(str(x) for x in current_settings["firms"]))
+        tk.Label(body, text="Фирмы и контрагенты — по одному на строку.", bg="#fff", fg="#758179", font=("Segoe UI", 8)).pack(anchor="w")
+        tax_row = tk.Frame(body, bg="#fff"); tax_row.pack(fill="x", pady=5)
+        tk.Label(tax_row, text="НДС, %:", bg="#fff").pack(side="left"); ttk.Entry(tax_row, textvariable=vat_var, width=8).pack(side="left", padx=(4, 18))
+        tk.Label(tax_row, text="Налог на прибыль, %:", bg="#fff").pack(side="left"); ttk.Entry(tax_row, textvariable=profit_var, width=8).pack(side="left", padx=4)
 
         ttk.Separator(body).pack(fill="x", pady=4)
         tk.Label(body, text="Смена пароля запуска Fitnes", bg="#fff", fg="#1f3027", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(10, 3))
@@ -454,6 +507,10 @@ class BalanceGUI(tk.Tk):
                 unlocked = self._unlock_database(target_path)
                 if not unlocked: return
                 target_ledger, target_security = unlocked
+            try:
+                target_ledger.set_settings(owner1_var.get(), owner2_var.get(), firms_text.get("1.0", "end").splitlines(), vat_var.get(), profit_var.get())
+            except ValueError as error:
+                messagebox.showerror("Fitnes", str(error), parent=window); return
             if db_password.get() or db_confirm.get():
                 if db_password.get() != db_confirm.get():
                     messagebox.showerror("Fitnes", "Новые пароли базы не совпадают", parent=window); return
@@ -467,6 +524,7 @@ class BalanceGUI(tk.Tk):
             self.ledger, self.database_security = target_ledger, target_security
             self.db_path_label.config(text=f"База: {self.ledger.db_path}")
             self._refresh_database_selector()
+            self._refresh_party_boxes()
             self.refresh()
             window.destroy()
             messagebox.showinfo("Fitnes", "Настройки сохранены. При изменении сетевого доступа перезапустите Fitnes.", parent=self)

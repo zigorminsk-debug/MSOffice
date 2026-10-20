@@ -7,7 +7,8 @@ from pathlib import Path
 
 from flask import Flask, flash, redirect, render_template, request, send_file, session, url_for
 
-from .core import CURRENCIES, KINDS, OWNERS, Ledger, format_money
+from .core import CURRENCIES, KINDS, Ledger, format_money
+from .help_content import FEATURE_SECTIONS
 from .security import DatabaseSecurity, SecurityConfig
 
 
@@ -67,7 +68,9 @@ def create_app(
             summary=ledger.summary(),
             deposits=ledger.deposit_balances(),
             kinds=KINDS,
-            owners=OWNERS,
+            owners=ledger.owners,
+            parties=ledger.parties,
+            settings=ledger.settings(),
             currencies=CURRENCIES,
             protected=security is not None and security.configured,
             active_database=security.database_name(db_path) if security else Path(str(db_path or "fitnes.db")).stem,
@@ -120,7 +123,7 @@ def create_app(
                 return redirect(url_for("index"))
             except ValueError as error:
                 flash(str(error), "error")
-        return render_template("edit.html", entry=entry, kinds=KINDS, owners=OWNERS, currencies=CURRENCIES)
+        return render_template("edit.html", entry=entry, kinds=KINDS, owners=ledger.owners, parties=ledger.parties, currencies=CURRENCIES)
 
     @app.post("/entries/<int:entry_id>/delete")
     def delete_entry(entry_id: int):
@@ -151,9 +154,25 @@ def create_app(
         target = ledger.export_csv(export_dir / f"fitnes-{date.today().isoformat()}.csv")
         return send_file(target, as_attachment=True, download_name=target.name)
 
+    @app.route("/settings", methods=["GET", "POST"])
+    def settings_page():
+        ledger: Ledger = app.config["LEDGER"]
+        if request.method == "POST":
+            try:
+                ledger.set_settings(
+                    request.form.get("owner1", ""), request.form.get("owner2", ""),
+                    request.form.get("firms", "").splitlines(), request.form.get("vat_rate", ""),
+                    request.form.get("profit_tax_rate", ""),
+                )
+                flash("Настройки сохранены", "success")
+                return redirect(url_for("index"))
+            except ValueError as error:
+                flash(str(error), "error")
+        return render_template("settings.html", settings=ledger.settings())
+
     @app.get("/help")
     def help_page():
-        return render_template("help.html")
+        return render_template("help.html", sections=FEATURE_SECTIONS)
 
     @app.get("/health")
     def health():

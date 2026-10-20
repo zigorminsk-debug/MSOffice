@@ -14,7 +14,10 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Iterator
 
-OWNERS = ("Игорь", "Юра")
+DEFAULT_OWNERS = ("Собственник 1", "Собственник 2")
+OWNERS = DEFAULT_OWNERS  # совместимость для внешних импортов
+DEFAULT_VAT_RATE = Decimal("20")
+DEFAULT_PROFIT_TAX_RATE = Decimal("20")
 CURRENCIES = ("BYN", "USD")
 # Код: название, раздел, рекомендуемый знак, режим расчёта.
 KINDS = {
@@ -28,7 +31,7 @@ KINDS = {
     "investment": ("Инвестиционные расходы", "Расход", 1, "debt"),
     "repayment_bank": ("Возврат долга — перечисление", "Возврат", -1, "debt"),
     "repayment_cash": ("Возврат долга — наличные", "Возврат", -1, "debt"),
-    "personal_purchase": ("Личная покупка", "Личная покупка", 1, "debt"),
+    "personal_purchase": ("Покупка собственника для себя", "Личная покупка", 1, "debt"),
     "loan_deposit": ("Внесение на депозит", "Депозиты", 1, "deposit_add"),
     "loan_use": ("Расход из депозита / снятие", "Депозиты", -1, "deposit_use"),
     "adjustment": ("Корректировка задолженности", "Корректировка", 1, "debt"),
@@ -109,7 +112,7 @@ class Entry:
     to_party: str
     description: str
     created_at: str
-    owner: str = "Юра"
+    owner: str = "Собственник 2"
     currency: str = "BYN"
     fx_rate: str = "1"
     amount_byn_cents: int = 0
@@ -118,6 +121,12 @@ class Entry:
     deposit_source: str = ""
     edited_at: str = ""
     edit_count: int = 0
+    vat_rate: str = ""
+    profit_tax_rate: str = ""
+    vat_cents: int = 0
+    profit_tax_cents: int = 0
+    debt_amount_cents: int = 0
+    owner_slot: int = 2
 
     @property
     def edit_note(self) -> str:
@@ -142,8 +151,22 @@ class Entry:
     def effect_cents(self) -> int:
         if self.mode != "debt":
             return 0
-        owner_direction = 1 if self.owner == "Юра" else -1
-        return self.byn_cents * self.sign * owner_direction
+        owner_direction = 1 if self.owner_slot == 2 else -1
+        return self.settlement_cents * self.sign * owner_direction
+
+    @property
+    def settlement_cents(self) -> int:
+        return self.debt_amount_cents or self.byn_cents
+
+    @property
+    def tax_note(self) -> str:
+        if self.kind != "personal_purchase" or not self.debt_amount_cents:
+            return ""
+        return (
+            f"Расчёт личной покупки: {format_money(self.byn_cents)} − НДС {self.vat_rate}% "
+            f"({format_money(self.vat_cents)}) − налог на прибыль {self.profit_tax_rate}% "
+            f"({format_money(self.profit_tax_cents)}) = долг {format_money(self.debt_amount_cents)}"
+        )
 
     @property
     def deposit_effect_cents(self) -> int:
@@ -210,25 +233,37 @@ class Ledger:
                     to_party TEXT NOT NULL DEFAULT '',
                     description TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    owner TEXT NOT NULL DEFAULT 'Юра',
+                    owner TEXT NOT NULL DEFAULT 'Собственник 2',
                     currency TEXT NOT NULL DEFAULT 'BYN',
                     fx_rate TEXT NOT NULL DEFAULT '1',
                     amount_byn_cents INTEGER NOT NULL DEFAULT 0,
                     reference_rate TEXT NOT NULL DEFAULT '',
                     fx_difference_cents INTEGER NOT NULL DEFAULT 0,
-                    deposit_source TEXT NOT NULL DEFAULT ''
+                    deposit_source TEXT NOT NULL DEFAULT '',
+                    vat_rate TEXT NOT NULL DEFAULT '',
+                    profit_tax_rate TEXT NOT NULL DEFAULT '',
+                    vat_cents INTEGER NOT NULL DEFAULT 0,
+                    profit_tax_cents INTEGER NOT NULL DEFAULT 0,
+                    debt_amount_cents INTEGER NOT NULL DEFAULT 0,
+                    owner_slot INTEGER NOT NULL DEFAULT 2
                 )
                 """
             )
             existing = {row[1] for row in db.execute("PRAGMA table_info(entries)")}
             migrations = {
-                "owner": "ALTER TABLE entries ADD COLUMN owner TEXT NOT NULL DEFAULT 'Юра'",
+                "owner": "ALTER TABLE entries ADD COLUMN owner TEXT NOT NULL DEFAULT 'Собственник 2'",
                 "currency": "ALTER TABLE entries ADD COLUMN currency TEXT NOT NULL DEFAULT 'BYN'",
                 "fx_rate": "ALTER TABLE entries ADD COLUMN fx_rate TEXT NOT NULL DEFAULT '1'",
                 "amount_byn_cents": "ALTER TABLE entries ADD COLUMN amount_byn_cents INTEGER NOT NULL DEFAULT 0",
                 "reference_rate": "ALTER TABLE entries ADD COLUMN reference_rate TEXT NOT NULL DEFAULT ''",
                 "fx_difference_cents": "ALTER TABLE entries ADD COLUMN fx_difference_cents INTEGER NOT NULL DEFAULT 0",
                 "deposit_source": "ALTER TABLE entries ADD COLUMN deposit_source TEXT NOT NULL DEFAULT ''",
+                "vat_rate": "ALTER TABLE entries ADD COLUMN vat_rate TEXT NOT NULL DEFAULT ''",
+                "profit_tax_rate": "ALTER TABLE entries ADD COLUMN profit_tax_rate TEXT NOT NULL DEFAULT ''",
+                "vat_cents": "ALTER TABLE entries ADD COLUMN vat_cents INTEGER NOT NULL DEFAULT 0",
+                "profit_tax_cents": "ALTER TABLE entries ADD COLUMN profit_tax_cents INTEGER NOT NULL DEFAULT 0",
+                "debt_amount_cents": "ALTER TABLE entries ADD COLUMN debt_amount_cents INTEGER NOT NULL DEFAULT 0",
+                "owner_slot": "ALTER TABLE entries ADD COLUMN owner_slot INTEGER NOT NULL DEFAULT 2",
             }
             for column, sql in migrations.items():
                 if column not in existing:
@@ -244,10 +279,58 @@ class Ledger:
                 )"""
             )
             db.execute("CREATE INDEX IF NOT EXISTS idx_entry_edits_entry ON entry_edits(entry_id, id)")
+            db.execute("CREATE TABLE IF NOT EXISTS fitnes_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            defaults = {
+                "owner1": DEFAULT_OWNERS[0], "owner2": DEFAULT_OWNERS[1], "firms": "[]",
+                "vat_rate": str(DEFAULT_VAT_RATE), "profit_tax_rate": str(DEFAULT_PROFIT_TAX_RATE),
+            }
+            for key, value in defaults.items():
+                db.execute("INSERT OR IGNORE INTO fitnes_settings(key, value) VALUES (?, ?)", (key, value))
+            # Однократная обезличенная миграция прежних имён.
+            db.execute("UPDATE entries SET owner_slot=1 WHERE owner IN ('Игорь', 'Собственник 1')")
+            db.execute("UPDATE entries SET owner_slot=2 WHERE owner IN ('Юра', 'Собственник 2')")
+            db.execute("UPDATE entries SET owner=? WHERE owner='Игорь'", (DEFAULT_OWNERS[0],))
+            db.execute("UPDATE entries SET owner=? WHERE owner='Юра'", (DEFAULT_OWNERS[1],))
+
+    def settings(self) -> dict[str, object]:
+        with self.connect() as db:
+            values = {row[0]: row[1] for row in db.execute("SELECT key, value FROM fitnes_settings")}
+        try:
+            firms = json.loads(values.get("firms", "[]"))
+        except json.JSONDecodeError:
+            firms = []
+        return {"owner1": values.get("owner1", DEFAULT_OWNERS[0]), "owner2": values.get("owner2", DEFAULT_OWNERS[1]),
+                "firms": firms, "vat_rate": values.get("vat_rate", "20"),
+                "profit_tax_rate": values.get("profit_tax_rate", "20")}
+
+    @property
+    def owners(self) -> tuple[str, str]:
+        values = self.settings()
+        return str(values["owner1"]), str(values["owner2"])
+
+    @property
+    def parties(self) -> list[str]:
+        values = self.settings()
+        return list(dict.fromkeys([*self.owners, *(str(x) for x in values["firms"] if str(x).strip())]))
+
+    def set_settings(self, owner1: str, owner2: str, firms: list[str], vat_rate: str, profit_tax_rate: str) -> None:
+        owner1, owner2 = owner1.strip(), owner2.strip()
+        if not owner1 or not owner2 or owner1.casefold() == owner2.casefold():
+            raise ValueError("Укажите два разных имени собственников")
+        vat, profit = decimal_value(vat_rate), decimal_value(profit_tax_rate)
+        if vat > 100 or profit > 100:
+            raise ValueError("Ставка налога должна быть от 0 до 100 процентов")
+        clean_firms = list(dict.fromkeys(x.strip() for x in firms if x.strip() and x.strip() not in {owner1, owner2}))
+        with self.connect() as db:
+            db.execute("UPDATE entries SET owner=? WHERE owner_slot=1", (owner1,))
+            db.execute("UPDATE entries SET owner=? WHERE owner_slot=2", (owner2,))
+            for key, value in {"owner1": owner1, "owner2": owner2, "firms": json.dumps(clean_firms, ensure_ascii=False),
+                               "vat_rate": str(vat), "profit_tax_rate": str(profit)}.items():
+                db.execute("INSERT OR REPLACE INTO fitnes_settings(key, value) VALUES (?, ?)", (key, value))
 
     def _prepare_entry(
         self, *, operation_date: str, kind: str, amount: str | int | Decimal,
-        sign: int | str, owner: str = "Юра", currency: str = "BYN",
+        sign: int | str, owner: str = "Собственник 2", currency: str = "BYN",
         fx_rate: str | Decimal | None = None,
         reference_rate: str | Decimal | None = None, deposit_source: str = "",
         from_party: str = "", to_party: str = "", description: str = "",
@@ -258,7 +341,7 @@ class Ledger:
             date.fromisoformat(operation_date)
         except ValueError as exc:
             raise ValueError("Некорректная дата") from exc
-        if owner not in OWNERS:
+        if owner not in self.owners:
             raise ValueError("Выберите, на чей баланс относится сумма")
         if currency not in CURRENCIES:
             raise ValueError("Поддерживаются только BYN и USD")
@@ -290,6 +373,17 @@ class Ledger:
             else:
                 rate = Decimal("1")
             byn_cents = int((Decimal(cents) * rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        vat_rate = profit_rate = ""
+        vat_cents = profit_tax_cents = debt_amount_cents = 0
+        if kind == "personal_purchase":
+            settings = self.settings()
+            vat = Decimal(settings["vat_rate"])
+            profit = Decimal(settings["profit_tax_rate"])
+            vat_cents = int((Decimal(byn_cents) * vat / (Decimal("100") + vat)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+            taxable_cents = byn_cents - vat_cents
+            profit_tax_cents = int((Decimal(taxable_cents) * profit / Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+            debt_amount_cents = byn_cents - vat_cents - profit_tax_cents
+            vat_rate, profit_rate = str(vat), str(profit)
         source = deposit_source.strip()
         if KINDS[kind][3] in {"deposit_add", "deposit_use"} and not source:
             source = from_party.strip() or owner
@@ -297,6 +391,7 @@ class Ledger:
             operation_date, kind, cents, sign_int, from_party.strip(), to_party.strip(),
             description.strip(), owner, currency, str(rate), byn_cents,
             str(reference) if reference is not None else "", fx_difference, source,
+            vat_rate, profit_rate, vat_cents, profit_tax_cents, debt_amount_cents, self.owners.index(owner) + 1,
         )
 
     def add(self, **values) -> int:
@@ -305,8 +400,8 @@ class Ledger:
             cursor = db.execute(
                 """INSERT INTO entries
                 (operation_date, kind, amount_cents, sign, from_party, to_party, description,
-                 owner, currency, fx_rate, amount_byn_cents, reference_rate, fx_difference_cents, deposit_source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 owner, currency, fx_rate, amount_byn_cents, reference_rate, fx_difference_cents, deposit_source, vat_rate, profit_tax_rate, vat_cents, profit_tax_cents, debt_amount_cents, owner_slot)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 prepared,
             )
             return int(cursor.lastrowid)
@@ -317,7 +412,7 @@ class Ledger:
             result = db.execute(
                 """UPDATE entries SET operation_date=?, kind=?, amount_cents=?, sign=?,
                 from_party=?, to_party=?, description=?, owner=?, currency=?, fx_rate=?,
-                amount_byn_cents=?, reference_rate=?, fx_difference_cents=?, deposit_source=? WHERE id=?""",
+                amount_byn_cents=?, reference_rate=?, fx_difference_cents=?, deposit_source=?, vat_rate=?, profit_tax_rate=?, vat_cents=?, profit_tax_cents=?, debt_amount_cents=?, owner_slot=? WHERE id=?""",
                 (*prepared, entry_id),
             )
             if result.rowcount:
@@ -363,14 +458,14 @@ class Ledger:
         debt = sum(item.effect_cents for item in entries)
         return {
             "debt": debt,
-            "igor": debt,
-            "yura": -debt,
+            "owner1": debt,
+            "owner2": -debt,
             "incoming": sum(item.byn_cents for item in entries if item.section == "Приход"),
             "expenses": sum(item.byn_cents for item in entries if item.section == "Расход"),
             "repayments": sum(item.byn_cents for item in entries if item.mode == "debt" and item.sign < 0),
             "increases": sum(item.byn_cents for item in entries if item.mode == "debt" and item.sign > 0),
-            "igor_deposit": sum(item.deposit_effect_cents for item in entries if item.owner == "Игорь"),
-            "yura_deposit": sum(item.deposit_effect_cents for item in entries if item.owner == "Юра"),
+            "owner1_deposit": sum(item.deposit_effect_cents for item in entries if item.owner == self.owners[0]),
+            "owner2_deposit": sum(item.deposit_effect_cents for item in entries if item.owner == self.owners[1]),
             "fx_difference": sum(item.fx_difference_cents for item in entries),
         }
 
@@ -431,9 +526,9 @@ class Ledger:
                 kind = raw_kind if raw_kind in KINDS else kind_by_label.get(normalized(raw_kind), "")
                 if not kind:
                     raise ValueError(f"неизвестная операция «{raw_kind}»")
-                owner = value(row, "Баланс", "На чей баланс", "Владелец", "Owner", required=True).capitalize()
-                if owner not in OWNERS:
-                    raise ValueError("баланс должен быть «Игорь» или «Юра»")
+                owner = value(row, "Баланс", "На чей баланс", "Владелец", "Owner", required=True)
+                if owner not in self.owners:
+                    raise ValueError(f"баланс должен быть «{self.owners[0]}» или «{self.owners[1]}»")
                 raw_sign = value(row, "Знак", "Действие", "Sign", required=True).replace("−", "-")
                 if raw_sign.strip().lower() in {"+", "+1", "1", "плюс"}:
                     sign = 1
@@ -464,8 +559,8 @@ class Ledger:
             db.executemany(
                 """INSERT INTO entries
                 (operation_date, kind, amount_cents, sign, from_party, to_party, description,
-                 owner, currency, fx_rate, amount_byn_cents, reference_rate, fx_difference_cents, deposit_source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 owner, currency, fx_rate, amount_byn_cents, reference_rate, fx_difference_cents, deposit_source, vat_rate, profit_tax_rate, vat_cents, profit_tax_cents, debt_amount_cents, owner_slot)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 prepared,
             )
         return len(prepared)
@@ -477,7 +572,7 @@ class Ledger:
             writer.writerow(["Дата", "Раздел", "Операция", "Баланс", "Знак", "Сумма", "Валюта",
                              "Курс внесения", "Курс получения", "Получено BYN", "Курсовая разница",
                              "Источник депозита", "От кого", "Кому", "Пояснение", "Примечание редактирования",
-                             "Изменение взаимного долга", "Изменение депозита займа"])
+                             "НДС", "Налог на прибыль", "Расчётный долг", "Изменение взаимного долга", "Изменение депозита займа"])
             for item in reversed(self.list()):
                 writer.writerow([
                     item.operation_date, item.section, item.kind_label, item.owner,
@@ -486,6 +581,8 @@ class Ledger:
                     f"{Decimal(item.byn_cents) / 100:.2f}",
                     f"{Decimal(item.fx_difference_cents) / 100:.2f}",
                     item.deposit_source, item.from_party, item.to_party, item.description, item.edit_note,
+                    f"{Decimal(item.vat_cents) / 100:.2f}", f"{Decimal(item.profit_tax_cents) / 100:.2f}",
+                    f"{Decimal(item.settlement_cents) / 100:.2f}",
                     f"{Decimal(item.effect_cents) / 100:.2f}",
                     f"{Decimal(item.deposit_effect_cents) / 100:.2f}",
                 ])
