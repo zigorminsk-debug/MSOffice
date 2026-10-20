@@ -12,6 +12,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from .core import KINDS, Ledger, format_money
 from .help_content import HELP_TEXT
+from .grammar import to_dative
 from .security import DatabaseSecurity, SecurityConfig
 from .web import create_app
 
@@ -320,7 +321,7 @@ class BalanceGUI(tk.Tk):
         calculator_total = 0
         for item in entries:
             if item.mode == "debt":
-                effect = (f"{self.ledger.owners[1]} → {self.ledger.owners[0]}" if item.effect_cents > 0 else f"{self.ledger.owners[0]} → {self.ledger.owners[1]}") + f" {format_money(abs(item.effect_cents))}"
+                effect = (f"{self.ledger.owners[1]} → {to_dative(self.ledger.owners[0])}" if item.effect_cents > 0 else f"{self.ledger.owners[0]} → {to_dative(self.ledger.owners[1])}") + f" {format_money(abs(item.effect_cents))}"
                 tag = "plus" if item.effect_cents > 0 else "minus"
             else:
                 effect = f"Депозит {'+' if item.deposit_effect_cents > 0 else '−'} {format_money(abs(item.deposit_effect_cents))}"
@@ -345,7 +346,7 @@ class BalanceGUI(tk.Tk):
             if item.mode in {"deposit_add", "deposit_use"}:
                 operation += f" · от {item.deposit_name}"
             self.table.insert("", "end", iid=str(item.id), values=(item.operation_date, operation, item.owner,
-                f"{item.from_party or '—'} → {item.to_party or '—'}", original, format_money(item.byn_cents), effect, note), tags=tuple(tags))
+                f"{item.from_party or '—'} → {to_dative(item.to_party) if item.to_party else '—'}", original, format_money(item.byn_cents), effect, note), tags=tuple(tags))
         if self.calculator_ids:
             self.calculator_label.config(text=f"Калькулятор: выбрано {len(self.calculator_ids)} · Итого {format_money(calculator_total)}")
         else:
@@ -359,8 +360,8 @@ class BalanceGUI(tk.Tk):
         else:
             self.deposit_banner.pack_forget()
         summary = self.ledger.summary()
-        if summary["debt"] > 0: title, value = f"{self.ledger.owners[1]} должен {self.ledger.owners[0]}", summary["debt"]
-        elif summary["debt"] < 0: title, value = f"{self.ledger.owners[0]} должен {self.ledger.owners[1]}", -summary["debt"]
+        if summary["debt"] > 0: title, value = f"{self.ledger.owners[1]} должен {to_dative(self.ledger.owners[0])}", summary["debt"]
+        elif summary["debt"] < 0: title, value = f"{self.ledger.owners[0]} должен {to_dative(self.ledger.owners[1])}", -summary["debt"]
         else: title, value = "Расчёты закрыты", 0
         self.debt_title.config(text=title); self.debt_value.config(text=format_money(value))
         self.stats.config(text=f"Приход: {format_money(summary['incoming'])}   Расходы: {format_money(summary['expenses'])}   Курсовая разница: {format_money(summary['fx_difference'])}   Депозит {self.ledger.owners[0]}: {format_money(summary['owner1_deposit'])}   Депозит {self.ledger.owners[1]}: {format_money(summary['owner2_deposit'])}")

@@ -9,6 +9,7 @@ from flask import Flask, flash, redirect, render_template, request, send_file, s
 
 from .core import CURRENCIES, KINDS, Ledger, format_money
 from .help_content import FEATURE_SECTIONS
+from .grammar import to_dative
 from .security import DatabaseSecurity, SecurityConfig
 
 
@@ -24,6 +25,7 @@ def create_app(
     app.config["DATABASE_SECURITY"] = database_security
     app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
     app.jinja_env.filters["money"] = format_money
+    app.jinja_env.filters["dative"] = to_dative
 
     @app.before_request
     def require_password():

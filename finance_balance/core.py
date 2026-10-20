@@ -23,7 +23,8 @@ CURRENCIES = ("BYN", "USD")
 KINDS = {
     "credit": ("Кредит", "Приход", 1, "debt"),
     "income": ("Иное поступление", "Приход", 1, "debt"),
-    "purchase": ("Покупка товаров", "Расход", 1, "debt"),
+    "purchase": ("Покупка товаров собственником — с вычетом налогов", "Расход", 1, "debt"),
+    "personal_purchase": ("Личная покупка собственника — с вычетом налогов", "Личная покупка", 1, "debt"),
     "cash_withdrawal": ("Снятие наличных", "Расход", 1, "debt"),
     "interest": ("Проценты банка", "Расход", 1, "debt"),
     "fine": ("Штраф", "Расход", 1, "debt"),
@@ -31,7 +32,6 @@ KINDS = {
     "investment": ("Инвестиционные расходы", "Расход", 1, "debt"),
     "repayment_bank": ("Возврат долга — перечисление", "Возврат", -1, "debt"),
     "repayment_cash": ("Возврат долга — наличные", "Возврат", -1, "debt"),
-    "personal_purchase": ("Покупка собственника для себя", "Личная покупка", 1, "debt"),
     "loan_deposit": ("Внесение на депозит", "Депозиты", 1, "deposit_add"),
     "loan_use": ("Расход из депозита / снятие", "Депозиты", -1, "deposit_use"),
     "adjustment": ("Корректировка задолженности", "Корректировка", 1, "debt"),
@@ -160,10 +160,10 @@ class Entry:
 
     @property
     def tax_note(self) -> str:
-        if self.kind != "personal_purchase" or not self.debt_amount_cents:
+        if self.kind not in {"purchase", "personal_purchase"} or not self.debt_amount_cents:
             return ""
         return (
-            f"Расчёт личной покупки: {format_money(self.byn_cents)} − НДС {self.vat_rate}% "
+            f"Расчёт покупки собственника: {format_money(self.byn_cents)} − НДС {self.vat_rate}% "
             f"({format_money(self.vat_cents)}) − налог на прибыль {self.profit_tax_rate}% "
             f"({format_money(self.profit_tax_cents)}) = долг {format_money(self.debt_amount_cents)}"
         )
@@ -291,6 +291,28 @@ class Ledger:
             db.execute("UPDATE entries SET owner_slot=2 WHERE owner IN ('Юра', 'Собственник 2')")
             db.execute("UPDATE entries SET owner=? WHERE owner='Игорь'", (DEFAULT_OWNERS[0],))
             db.execute("UPDATE entries SET owner=? WHERE owner='Юра'", (DEFAULT_OWNERS[1],))
+            self._backfill_tax_calculations(db)
+
+    @staticmethod
+    def _tax_calculation(amount_cents: int, vat: Decimal, profit: Decimal) -> tuple[int, int, int]:
+        vat_cents = int((Decimal(amount_cents) * vat / (Decimal("100") + vat)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        taxable_cents = amount_cents - vat_cents
+        profit_cents = int((Decimal(taxable_cents) * profit / Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        return vat_cents, profit_cents, amount_cents - vat_cents - profit_cents
+
+    def _backfill_tax_calculations(self, db: sqlite3.Connection) -> None:
+        values = {row[0]: row[1] for row in db.execute("SELECT key, value FROM fitnes_settings")}
+        vat, profit = Decimal(values.get("vat_rate", "20")), Decimal(values.get("profit_tax_rate", "20"))
+        rows = db.execute(
+            "SELECT id, CASE WHEN amount_byn_cents=0 THEN amount_cents ELSE amount_byn_cents END "
+            "FROM entries WHERE kind IN ('purchase', 'personal_purchase') AND debt_amount_cents=0"
+        ).fetchall()
+        for entry_id, amount_cents in rows:
+            vat_cents, profit_cents, debt_cents = self._tax_calculation(amount_cents, vat, profit)
+            db.execute(
+                "UPDATE entries SET vat_rate=?, profit_tax_rate=?, vat_cents=?, profit_tax_cents=?, debt_amount_cents=? WHERE id=?",
+                (str(vat), str(profit), vat_cents, profit_cents, debt_cents, entry_id),
+            )
 
     def settings(self) -> dict[str, object]:
         with self.connect() as db:
@@ -375,14 +397,11 @@ class Ledger:
             byn_cents = int((Decimal(cents) * rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
         vat_rate = profit_rate = ""
         vat_cents = profit_tax_cents = debt_amount_cents = 0
-        if kind == "personal_purchase":
+        if kind in {"purchase", "personal_purchase"}:
             settings = self.settings()
             vat = Decimal(settings["vat_rate"])
             profit = Decimal(settings["profit_tax_rate"])
-            vat_cents = int((Decimal(byn_cents) * vat / (Decimal("100") + vat)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-            taxable_cents = byn_cents - vat_cents
-            profit_tax_cents = int((Decimal(taxable_cents) * profit / Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-            debt_amount_cents = byn_cents - vat_cents - profit_tax_cents
+            vat_cents, profit_tax_cents, debt_amount_cents = self._tax_calculation(byn_cents, vat, profit)
             vat_rate, profit_rate = str(vat), str(profit)
         source = deposit_source.strip()
         if KINDS[kind][3] in {"deposit_add", "deposit_use"} and not source:

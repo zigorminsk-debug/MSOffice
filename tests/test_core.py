@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from finance_balance.core import Ledger, format_money, money_to_cents
+from finance_balance.grammar import to_dative
 
 
 class FixedRates:
@@ -34,7 +35,7 @@ def test_usd_conversion_and_loan_deposits(tmp_path):
     ledger.add(operation_date="2026-01-11", kind="loan_deposit", amount="1000", sign=1, owner="Собственник 1")
     ledger.add(operation_date="2026-01-12", kind="loan_use", amount="250", sign=-1, owner="Собственник 1")
     result = ledger.summary()
-    assert result["debt"] == 32_500
+    assert result["debt"] == 21_666
     assert result["owner1_deposit"] == 75_000
     assert result["owner2_deposit"] == 0
     usd = next(entry for entry in ledger.list() if entry.currency == "USD")
@@ -160,3 +161,25 @@ def test_configurable_owners_firms_and_tax_rates(tmp_path):
     assert ledger.parties == ["Первый", "Второй", "ООО Альфа", "ООО Бета"]
     entry_id = ledger.add(operation_date="2026-10-20", kind="credit", amount="10", sign=1, owner="Второй")
     assert ledger.get(entry_id).effect_cents == 1000
+
+
+def test_russian_dative_for_names_and_organizations():
+    assert to_dative("Игорь") == "Игорю"
+    assert to_dative("Юра") == "Юре"
+    assert to_dative("Павел") == "Павлу"
+    assert to_dative("ООО Ромашка") == "ООО Ромашке"
+    assert to_dative("ООО «Новая Ромашка»") == "ООО «Новой Ромашке»"
+    assert to_dative("ИП Иванов") == "ИП Иванову"
+
+
+def test_existing_goods_purchase_gets_tax_backfill(tmp_path):
+    path = tmp_path / "legacy-purchase.db"
+    ledger = Ledger(path)
+    with ledger.connect() as db:
+        db.execute("""INSERT INTO entries
+            (operation_date, kind, amount_cents, sign, owner, amount_byn_cents, owner_slot)
+            VALUES ('2026-10-20', 'purchase', 10000, 1, 'Собственник 2', 10000, 2)""")
+    reopened = Ledger(path)
+    entry = reopened.list()[0]
+    assert entry.debt_amount_cents == 6666
+    assert reopened.summary()["debt"] == 6666

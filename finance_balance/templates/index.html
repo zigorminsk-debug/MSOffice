@@ -13,8 +13,8 @@
   {% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}
   <section class="hero">
     <div><span class="eyebrow">ТЕКУЩИЙ ИТОГ В BYN</span>
-      {% if summary.debt > 0 %}<h1>{{ owners[1] }} должен {{ owners[0] }}</h1><div class="hero-value">{{ summary.debt|money }}</div>
-      {% elif summary.debt < 0 %}<h1>{{ owners[0] }} должен {{ owners[1] }}</h1><div class="hero-value">{{ (-summary.debt)|money }}</div>
+      {% if summary.debt > 0 %}<h1>{{ owners[1] }} должен {{ owners[0]|dative }}</h1><div class="hero-value">{{ summary.debt|money }}</div>
+      {% elif summary.debt < 0 %}<h1>{{ owners[0] }} должен {{ owners[1]|dative }}</h1><div class="hero-value">{{ (-summary.debt)|money }}</div>
       {% else %}<h1>Расчёты закрыты</h1><div class="hero-value">0,00 Br</div>{% endif %}
       <p>Сумма относится на баланс выбранного собственника. Валюта пересчитывается в BYN на дату операции.</p>
     </div>
@@ -69,10 +69,10 @@
         <thead><tr><th>Дата / операция</th><th>Баланс / направление</th><th>Исходная сумма</th><th>Сумма BYN</th><th>Влияние</th><th></th></tr></thead>
         <tbody>{% for entry in entries %}<tr{% if entry.tax_note %} title="{{ entry.tax_note }}" class="tax-row"{% endif %}>
           <td><strong>{{ entry.kind_label }}</strong><small>{{ entry.operation_date }} · {{ entry.section }}{% if entry.mode != 'debt' %} · депозит от {{ entry.deposit_name }}{% endif %}</small>{% if entry.description %}<em>{{ entry.description }}</em>{% endif %}{% if entry.tax_note %}<em class="audit-note" title="{{ entry.tax_note }}">ⓘ Наведите для расчёта налогов</em>{% endif %}{% if entry.edit_note %}<em class="audit-note">{{ entry.edit_note }}</em>{% endif %}</td>
-          <td><strong>{{ entry.owner }}</strong><small>{{ entry.from_party or '—' }} → {{ entry.to_party or '—' }}</small></td>
+          <td><strong>{{ entry.owner }}</strong><small>{{ entry.from_party or '—' }} → {{ (entry.to_party|dative) if entry.to_party else '—' }}</small></td>
           <td class="calc-amount" data-calc-byn="{{ entry.calculator_byn_cents }}" title="Ctrl+клик: добавить в калькулятор">{{ entry.amount_cents|money(entry.currency) }}{% if entry.reference_rate %}<small>курс {{ entry.reference_rate }} → {{ entry.fx_rate }}</small>{% elif entry.currency == 'USD' %}<small>курс {{ entry.fx_rate }} BYN</small>{% endif %}</td>
           <td>{{ entry.byn_cents|money }}{% if entry.fx_difference_cents %}<small>курсовая разница {{ entry.fx_difference_cents|money }}</small>{% endif %}</td>
-          <td>{% if entry.mode == 'debt' %}<span class="effect {{ 'up' if entry.effect_cents > 0 else 'down' }}">{% if entry.effect_cents > 0 %}{{ owners[1] }} → {{ owners[0] }} +{% else %}{{ owners[0] }} → {{ owners[1] }} +{% endif %} {{ (entry.effect_cents|abs)|money }}</span>{% else %}<span class="effect {{ 'up' if entry.deposit_effect_cents < 0 else 'down' }}">Депозит {{ '+' if entry.deposit_effect_cents > 0 else '−' }} {{ (entry.deposit_effect_cents|abs)|money }}</span>{% endif %}</td>
+          <td>{% if entry.mode == 'debt' %}<span class="effect {{ 'up' if entry.effect_cents > 0 else 'down' }}">{% if entry.effect_cents > 0 %}{{ owners[1] }} → {{ owners[0]|dative }} +{% else %}{{ owners[0] }} → {{ owners[1]|dative }} +{% endif %} {{ (entry.effect_cents|abs)|money }}</span>{% else %}<span class="effect {{ 'up' if entry.deposit_effect_cents < 0 else 'down' }}">Депозит {{ '+' if entry.deposit_effect_cents > 0 else '−' }} {{ (entry.deposit_effect_cents|abs)|money }}</span>{% endif %}</td>
           <td><div class="row-actions"><a class="edit-link" href="{{ url_for('edit_entry', entry_id=entry.id) }}" title="Редактировать">✎</a><form method="post" action="{{ url_for('delete_entry', entry_id=entry.id) }}" onsubmit="return confirm('Удалить эту операцию?')"><button class="delete" title="Удалить">×</button></form></div></td>
         </tr>{% endfor %}</tbody>
       </table></div>{% else %}<div class="empty"><div>Br</div><h3>Операций пока нет</h3><p>Добавьте первую запись слева. Итог пересчитается автоматически.</p></div>{% endif %}
@@ -80,10 +80,10 @@
   </div>
 </main>
 <div class="calculator-bar" id="calculator-bar"><span>Встроенный калькулятор</span><strong id="calculator-total">0,00 Br</strong><small id="calculator-count">Ctrl+клик по исходным суммам</small><button type="button" id="calculator-clear">Сбросить</button></div>
-<footer>Данные хранятся локально · Курсы USD: официальный API НБРБ · Fitnes v2.3</footer>
+<footer>Данные хранятся локально · Курсы USD: официальный API НБРБ · Fitnes v2.3.1</footer>
 <script>
   const kind=document.getElementById('kind'),sign=document.getElementById('sign'),currency=document.getElementById('currency'),rate=document.getElementById('rate-label'),reference=document.getElementById('reference-label'),depositSource=document.getElementById('deposit-source-label'),hint=document.getElementById('operation-hint');
-  function updateKind(){const option=kind.selectedOptions[0];sign.value=option.dataset.sign;if(option.dataset.mode==='deposit_add')hint.innerHTML='<b>Займ:</b> сумма зачислится на депозит. При валютном размещении укажите курс внесения в пояснении или при снятии.';else if(option.dataset.mode==='deposit_use')hint.innerHTML='<b>Курсовая разница:</b> введите исходную сумму в BYN, курс внесения и курс получения. Например: 30 000; 3,2; 2,7 → получено 25 312,50, потеря 4 687,50, депозит закрыт полностью.';else if(kind.value==='personal_purchase')hint.innerHTML='<b>Налоги:</b> сумма считается ценой с НДС. Fitnes исключит НДС '+{{ settings.vat_rate|tojson }}+'% и экономию налога на прибыль '+{{ settings.profit_tax_rate|tojson }}+'%, затем сохранит расчёт во всплывающем примечании.';else hint.innerHTML='<b>Правило:</b> «+» увеличивает задолженность выбранного собственника перед вторым, «−» уменьшает её.';updateCurrency()}
+  function updateKind(){const option=kind.selectedOptions[0];sign.value=option.dataset.sign;if(option.dataset.mode==='deposit_add')hint.innerHTML='<b>Займ:</b> сумма зачислится на депозит. При валютном размещении укажите курс внесения в пояснении или при снятии.';else if(option.dataset.mode==='deposit_use')hint.innerHTML='<b>Курсовая разница:</b> введите исходную сумму в BYN, курс внесения и курс получения. Например: 30 000; 3,2; 2,7 → получено 25 312,50, потеря 4 687,50, депозит закрыт полностью.';else if(kind.value==='personal_purchase'||kind.value==='purchase')hint.innerHTML='<b>Налоги:</b> сумма считается ценой с НДС. Fitnes исключит НДС '+{{ settings.vat_rate|tojson }}+'% и экономию налога на прибыль '+{{ settings.profit_tax_rate|tojson }}+'%, затем сохранит расчёт во всплывающем примечании.';else hint.innerHTML='<b>Правило:</b> «+» увеличивает задолженность выбранного собственника перед вторым, «−» уменьшает её.';updateCurrency()}
   function updateCurrency(){const mode=kind.selectedOptions[0].dataset.mode,isDeposit=mode==='deposit_add'||mode==='deposit_use',isFx=mode==='deposit_use';rate.style.display=(currency.value==='USD'||isFx)?'block':'none';reference.style.display=isFx?'block':'none';depositSource.style.display=isDeposit?'block':'none'}
   kind.addEventListener('change',updateKind);currency.addEventListener('change',updateCurrency);updateKind();
 

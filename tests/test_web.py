@@ -63,4 +63,4 @@ def test_web_personal_purchase_tooltip_and_settings(tmp_path):
     }, follow_redirects=True)
     assert 'долг 66,66 Br'.encode("utf-8") in result.data
     assert b'class="tax-row"' in result.data
-    assert "Второй должен Первый".encode("utf-8") in result.data
+    assert "Второй должен Первому".encode("utf-8") in result.data

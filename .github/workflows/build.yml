@@ -44,6 +44,8 @@ jobs:
           --icon "assets/fitnes-icon.ico"
           --version-file "installer/version_info.txt"
           --collect-all flask
+          --collect-all pymorphy3
+          --collect-all pymorphy3_dicts_ru
           --add-data "finance_balance/templates;finance_balance/templates"
           --add-data "finance_balance/static;finance_balance/static"
           run.py
