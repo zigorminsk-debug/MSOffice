@@ -158,6 +158,47 @@ def create_app(
         target = ledger.export_csv(export_dir / f"fitnes-{date.today().isoformat()}.csv")
         return send_file(target, as_attachment=True, download_name=target.name)
 
+    @app.get("/currency")
+    def currency_page():
+        ledger: Ledger = app.config["LEDGER"]
+        return render_template("currency.html", trades=ledger.list_currency_trades(),
+                               summary=ledger.currency_summary(), owners=ledger.owners,
+                               today=date.today().isoformat())
+
+    @app.post("/currency/trades")
+    def add_currency_trade():
+        ledger: Ledger = app.config["LEDGER"]
+        try:
+            ledger.add_currency_trade(
+                operation_date=request.form.get("operation_date", ""),
+                owner=request.form.get("owner", ""), kind=request.form.get("kind", ""),
+                usd_amount=request.form.get("usd_amount", ""), rate=request.form.get("rate", ""),
+            )
+            flash("Валютная операция добавлена", "success")
+        except ValueError as error:
+            flash(str(error), "error")
+        return redirect(url_for("currency_page"))
+
+    @app.post("/currency/trades/<int:trade_id>/transfer")
+    def transfer_currency_loss(trade_id: int):
+        ledger: Ledger = app.config["LEDGER"]
+        try:
+            ledger.transfer_currency_loss(trade_id)
+            flash("Курсовая потеря добавлена в общий расчёт", "success")
+        except ValueError as error:
+            flash(str(error), "error")
+        return redirect(url_for("currency_page"))
+
+    @app.post("/currency/trades/<int:trade_id>/delete")
+    def delete_currency_trade(trade_id: int):
+        ledger: Ledger = app.config["LEDGER"]
+        try:
+            ledger.delete_currency_trade(trade_id)
+            flash("Валютная операция удалена", "success")
+        except ValueError as error:
+            flash(str(error), "error")
+        return redirect(url_for("currency_page"))
+
     @app.route("/settings", methods=["GET", "POST"])
     def settings_page():
         ledger: Ledger = app.config["LEDGER"]

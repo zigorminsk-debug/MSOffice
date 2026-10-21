@@ -93,3 +93,37 @@ def test_web_purchase_offsets_gross_debt_before_taxing_excess(tmp_path):
     assert "33,34 Br".encode("utf-8") in response.data
     assert "Погашено 100,00 Br".encode("utf-8") in response.data
     assert "остаток покупки 50,00 Br".encode("utf-8") in response.data
+
+
+def test_web_equal_opposite_purchases_show_zero_balance(tmp_path):
+    app = create_app(tmp_path / "equal-purchases-web.db")
+    app.config.update(TESTING=True)
+    client = app.test_client()
+    for owner in ("Собственник 2", "Собственник 1"):
+        response = client.post("/entries", data={"operation_date": "2026-10-20", "kind": "personal_purchase",
+                                                 "amount": "100", "sign": "1", "owner": owner,
+                                                 "currency": "BYN"}, follow_redirects=True)
+    assert "Расчёты закрыты".encode("utf-8") in response.data
+    assert "Погашено 100,00 Br".encode("utf-8") in response.data
+    assert "Долг закрыт".encode("utf-8") in response.data
+
+
+def test_web_currency_tab_and_transfer_loss(tmp_path):
+    app = create_app(tmp_path / "currency-web.db")
+    app.config.update(TESTING=True)
+    client = app.test_client()
+    page = client.get("/currency")
+    assert page.status_code == 200
+    assert "Валютный баланс USD".encode("utf-8") in page.data
+    client.post("/currency/trades", data={"operation_date": "2026-10-20", "owner": "Собственник 2",
+                                                 "kind": "buy", "usd_amount": "100", "rate": "3.30"})
+    sold = client.post("/currency/trades", data={"operation_date": "2026-10-21", "owner": "Собственник 2",
+                                                 "kind": "sell", "usd_amount": "40", "rate": "3.10"},
+                       follow_redirects=True)
+    assert "Потеря".encode("utf-8") in sold.data
+    assert "8,00 Br".encode("utf-8") in sold.data
+    transferred = client.post("/currency/trades/2/transfer", follow_redirects=True)
+    assert "Курсовая потеря добавлена".encode("utf-8") in transferred.data
+    general = client.get("/")
+    assert "8,00 Br".encode("utf-8") in general.data
+    assert "Курсовая потеря USD".encode("utf-8") in general.data

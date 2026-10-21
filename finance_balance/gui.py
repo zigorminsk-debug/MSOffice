@@ -143,7 +143,14 @@ class BalanceGUI(tk.Tk):
         ttk.Button(actions, text="Импорт CSV", command=self.import_csv).pack(side="left", padx=5)
         ttk.Button(actions, text="Экспорт CSV", command=self.export).pack(side="left", padx=5)
 
-        form = tk.LabelFrame(self, text="  Новая операция  ", bg="#fff", fg="#16221d", font=("Segoe UI", 10, "bold"), padx=14, pady=10)
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill="both", expand=True, padx=10, pady=(8, 10))
+        general_tab = tk.Frame(self.notebook, bg="#f1f4f0")
+        self.currency_tab = tk.Frame(self.notebook, bg="#f1f4f0")
+        self.notebook.add(general_tab, text="Общий расчёт")
+        self.notebook.add(self.currency_tab, text="Валютный баланс USD")
+
+        form = tk.LabelFrame(general_tab, text="  Новая операция  ", bg="#fff", fg="#16221d", font=("Segoe UI", 10, "bold"), padx=14, pady=10)
         form.pack(fill="x", padx=20, pady=(16, 8))
         names = ("date", "owner", "kind", "sign", "amount", "currency", "rate", "reference", "deposit_source", "payment_method", "from", "to", "description")
         self.vars = {name: tk.StringVar() for name in names}
@@ -184,7 +191,7 @@ class BalanceGUI(tk.Tk):
         self.edit_note_label.grid(row=3, column=0, columnspan=8, sticky="ew", padx=4, pady=(5, 0))
         for column in range(8): form.grid_columnconfigure(column, weight=1)
 
-        content = tk.Frame(self, bg="#f1f4f0"); content.pack(fill="both", expand=True, padx=20, pady=(0, 18))
+        content = tk.Frame(general_tab, bg="#f1f4f0"); content.pack(fill="both", expand=True, padx=20, pady=(0, 18))
         self.stats = tk.Label(content, bg="#f1f4f0", fg="#506058", font=("Segoe UI", 9)); self.stats.pack(fill="x", pady=(5, 2))
         self.deposit_banner = tk.Label(content, bg="#dcecdf", fg="#174e37", font=("Segoe UI", 10, "bold"), anchor="w", padx=12, pady=7)
         self.deposit_banner.pack(fill="x", pady=(0, 6))
@@ -210,6 +217,103 @@ class BalanceGUI(tk.Tk):
         self.db_path_label.pack(side="left")
         self.calculator_label = tk.Label(bottom, text="Калькулятор: Ctrl+клик по ячейке «Исходная сумма»", bg="#f1f4f0", fg="#1e6849", font=("Segoe UI", 9, "bold"))
         self.calculator_label.pack(side="left", padx=24)
+
+        self._build_currency_tab()
+
+    def _build_currency_tab(self) -> None:
+        form = tk.LabelFrame(self.currency_tab, text="  Операция с USD  ", bg="#fff", fg="#16221d",
+                             font=("Segoe UI", 10, "bold"), padx=14, pady=10)
+        form.pack(fill="x", padx=20, pady=(16, 8))
+        self.fx_vars = {
+            "date": tk.StringVar(value=date.today().isoformat()),
+            "owner": tk.StringVar(value=self.ledger.owners[1]),
+            "kind": tk.StringVar(value="Покупка USD"),
+            "amount": tk.StringVar(), "rate": tk.StringVar(),
+        }
+        labels = (("Дата", "date"), ("Собственник", "owner"), ("Операция", "kind"),
+                  ("Сумма USD", "amount"), ("Курс банка BYN/USD", "rate"))
+        for column, (label, key) in enumerate(labels):
+            cell = tk.Frame(form, bg="#fff"); cell.grid(row=0, column=column, sticky="ew", padx=5)
+            tk.Label(cell, text=label, bg="#fff", fg="#66736c", font=("Segoe UI", 8)).pack(anchor="w")
+            if key == "owner":
+                widget = ttk.Combobox(cell, textvariable=self.fx_vars[key], values=self.ledger.owners, state="readonly")
+                self.fx_owner_box = widget
+            elif key == "kind":
+                widget = ttk.Combobox(cell, textvariable=self.fx_vars[key], values=["Покупка USD", "Продажа USD"], state="readonly")
+            else:
+                widget = ttk.Entry(cell, textvariable=self.fx_vars[key])
+            widget.pack(fill="x", pady=(2, 0))
+            form.grid_columnconfigure(column, weight=1)
+        ttk.Button(form, text="Добавить", command=self.add_currency_trade).grid(row=0, column=5, sticky="ew", padx=5, pady=(18, 0))
+        form.grid_columnconfigure(5, weight=1)
+        tk.Label(form, text="Покупка: укажите курс продажи банка. Продажа: курс покупки банка. Потеря рассчитывается по средней себестоимости USD.",
+                 bg="#fff", fg="#758179", font=("Segoe UI", 8)).grid(row=1, column=0, columnspan=6, sticky="w", padx=5, pady=(8, 0))
+
+        content = tk.Frame(self.currency_tab, bg="#f1f4f0"); content.pack(fill="both", expand=True, padx=20, pady=(0, 18))
+        self.fx_summary = tk.Label(content, bg="#dcecdf", fg="#174e37", font=("Segoe UI", 10, "bold"), anchor="w", padx=12, pady=8)
+        self.fx_summary.pack(fill="x", pady=(5, 8))
+        columns = ("date", "owner", "kind", "usd", "rate", "byn", "cost", "result", "status")
+        self.fx_table = ttk.Treeview(content, columns=columns, show="headings", selectmode="browse")
+        headings = {"date":"Дата", "owner":"Собственник", "kind":"Операция", "usd":"USD", "rate":"Курс", "byn":"BYN", "cost":"Себестоимость", "result":"Результат", "status":"Общий расчёт"}
+        widths = {"date":85, "owner":120, "kind":110, "usd":90, "rate":80, "byn":105, "cost":110, "result":150, "status":120}
+        for key in columns:
+            self.fx_table.heading(key, text=headings[key]); self.fx_table.column(key, width=widths[key], anchor="w")
+        self.fx_table.pack(fill="both", expand=True)
+        buttons = tk.Frame(content, bg="#f1f4f0"); buttons.pack(fill="x", pady=(8, 0))
+        ttk.Button(buttons, text="Добавить потерю в общий расчёт", command=self.transfer_currency_loss).pack(side="right")
+        ttk.Button(buttons, text="Удалить валютную операцию", command=self.delete_currency_trade).pack(side="right", padx=6)
+
+    def add_currency_trade(self) -> None:
+        try:
+            self.ledger.add_currency_trade(
+                operation_date=self.fx_vars["date"].get(), owner=self.fx_vars["owner"].get(),
+                kind="buy" if self.fx_vars["kind"].get() == "Покупка USD" else "sell",
+                usd_amount=self.fx_vars["amount"].get(), rate=self.fx_vars["rate"].get(),
+            )
+        except ValueError as error:
+            messagebox.showerror("Валютный баланс", str(error), parent=self); return
+        self.fx_vars["amount"].set(""); self.fx_vars["rate"].set("")
+        self._refresh_currency()
+
+    def _selected_currency_id(self) -> int | None:
+        selected = self.fx_table.selection()
+        if not selected:
+            messagebox.showinfo("Валютный баланс", "Выберите валютную операцию", parent=self)
+            return None
+        return int(selected[0])
+
+    def transfer_currency_loss(self) -> None:
+        trade_id = self._selected_currency_id()
+        if trade_id is None: return
+        try:
+            self.ledger.transfer_currency_loss(trade_id)
+        except ValueError as error:
+            messagebox.showerror("Валютный баланс", str(error), parent=self); return
+        self.refresh()
+        messagebox.showinfo("Валютный баланс", "Курсовая потеря добавлена в общий расчёт", parent=self)
+
+    def delete_currency_trade(self) -> None:
+        trade_id = self._selected_currency_id()
+        if trade_id is None or not messagebox.askyesno("Валютный баланс", "Удалить валютную операцию?", parent=self): return
+        try:
+            self.ledger.delete_currency_trade(trade_id)
+        except ValueError as error:
+            messagebox.showerror("Валютный баланс", str(error), parent=self); return
+        self._refresh_currency()
+
+    def _refresh_currency(self) -> None:
+        if not hasattr(self, "fx_table"): return
+        for row in self.fx_table.get_children(): self.fx_table.delete(row)
+        for trade in self.ledger.list_currency_trades():
+            if trade.kind == "buy": result = "—"
+            elif trade.result_cents >= 0: result = f"Потеря {format_money(trade.result_cents)}"
+            else: result = f"Прибыль {format_money(-trade.result_cents)}"
+            status = f"Добавлено · №{trade.transferred_entry_id}" if trade.transferred_entry_id else "Не добавлено"
+            self.fx_table.insert("", "end", iid=str(trade.id), values=(trade.operation_date, trade.owner, trade.kind_label,
+                format_money(trade.usd_cents, "USD"), trade.rate, format_money(trade.byn_cents),
+                format_money(trade.cost_basis_cents), result, status))
+        summary = self.ledger.currency_summary()
+        self.fx_summary.config(text=f"Остаток: {format_money(summary['usd_balance'], 'USD')}   ·   Себестоимость: {format_money(summary['cost_balance'])}   ·   Реализованная потеря: {format_money(summary['realized_loss'])}   ·   Перенесено: {format_money(summary['transferred_loss'])}")
 
     def _preset_sign(self, _event=None) -> None:
         code = self.kind_labels[self.vars["kind"].get()]
@@ -380,6 +484,7 @@ class BalanceGUI(tk.Tk):
         else: title, value = "Расчёты закрыты", 0
         self.debt_title.config(text=title); self.debt_value.config(text=format_money(value))
         self.stats.config(text=f"Приход: {format_money(summary['incoming'])}   Расходы: {format_money(summary['expenses'])}   Курсовая разница: {format_money(summary['fx_difference'])}   Депозит {self.ledger.owners[0]}: {format_money(summary['owner1_deposit'])}   Депозит {self.ledger.owners[1]}: {format_money(summary['owner2_deposit'])}")
+        self._refresh_currency()
 
     def delete_selected(self) -> None:
         selected = self.table.selection()
@@ -425,6 +530,9 @@ class BalanceGUI(tk.Tk):
         self.vars["owner"].set(self.ledger.owners[1])
         for box in (self.from_box, self.to_box, self.deposit_source_box):
             box["values"] = self.ledger.parties
+        if hasattr(self, "fx_owner_box"):
+            self.fx_owner_box["values"] = self.ledger.owners
+            self.fx_vars["owner"].set(self.ledger.owners[1])
 
     def _switch_database_event(self, _event=None) -> None:
         selected_name = self.database_selector.get()

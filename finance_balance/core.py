@@ -130,6 +130,7 @@ class Entry:
     repayment_method: str = ""
     purchase_offset_cents: int = 0
     balance_after_cents: int = 0
+    calculated_effect_cents: int = 0
 
     @property
     def edit_note(self) -> str:
@@ -154,8 +155,7 @@ class Entry:
     def effect_cents(self) -> int:
         if self.mode != "debt":
             return 0
-        owner_direction = 1 if self.owner_slot == 2 else -1
-        return self.balance_amount_cents * self.sign * owner_direction
+        return self.calculated_effect_cents
 
     @property
     def settlement_cents(self) -> int:
@@ -238,6 +238,42 @@ class Entry:
         return self.byn_cents
 
 
+@dataclass(frozen=True)
+class CurrencyTrade:
+    id: int
+    operation_date: str
+    owner: str
+    owner_slot: int
+    kind: str
+    usd_cents: int
+    rate: str
+    byn_cents: int
+    cost_basis_cents: int
+    result_cents: int
+    usd_balance_cents: int
+    cost_balance_cents: int
+    transferred_entry_id: int | None
+    created_at: str
+
+    @property
+    def kind_label(self) -> str:
+        return "Покупка USD" if self.kind == "buy" else "Продажа USD"
+
+    @property
+    def loss_cents(self) -> int:
+        return max(self.result_cents, 0)
+
+    @property
+    def result_note(self) -> str:
+        if self.kind == "buy":
+            return f"Куплено {format_money(self.usd_cents, 'USD')} за {format_money(self.byn_cents)} по курсу {self.rate}"
+        label = "потеря" if self.result_cents >= 0 else "прибыль"
+        return (
+            f"Продано {format_money(self.usd_cents, 'USD')}: себестоимость {format_money(self.cost_basis_cents)}, "
+            f"получено {format_money(self.byn_cents)}, {label} {format_money(abs(self.result_cents))}"
+        )
+
+
 class Ledger:
     def __init__(self, db_path: str | Path | None = None, rate_provider: NBRBRateProvider | None = None):
         self.db_path = Path(db_path) if db_path else default_db_path()
@@ -286,7 +322,8 @@ class Ledger:
                     owner_slot INTEGER NOT NULL DEFAULT 2,
                     repayment_method TEXT NOT NULL DEFAULT '',
                     purchase_offset_cents INTEGER NOT NULL DEFAULT 0,
-                    balance_after_cents INTEGER NOT NULL DEFAULT 0
+                    balance_after_cents INTEGER NOT NULL DEFAULT 0,
+                    calculated_effect_cents INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -308,6 +345,7 @@ class Ledger:
                 "repayment_method": "ALTER TABLE entries ADD COLUMN repayment_method TEXT NOT NULL DEFAULT ''",
                 "purchase_offset_cents": "ALTER TABLE entries ADD COLUMN purchase_offset_cents INTEGER NOT NULL DEFAULT 0",
                 "balance_after_cents": "ALTER TABLE entries ADD COLUMN balance_after_cents INTEGER NOT NULL DEFAULT 0",
+                "calculated_effect_cents": "ALTER TABLE entries ADD COLUMN calculated_effect_cents INTEGER NOT NULL DEFAULT 0",
             }
             for column, sql in migrations.items():
                 if column not in existing:
@@ -335,8 +373,26 @@ class Ledger:
             db.execute("UPDATE entries SET owner_slot=2 WHERE owner IN ('Юра', 'Собственник 2')")
             db.execute("UPDATE entries SET owner=? WHERE owner='Игорь'", (DEFAULT_OWNERS[0],))
             db.execute("UPDATE entries SET owner=? WHERE owner='Юра'", (DEFAULT_OWNERS[1],))
+            db.execute("""CREATE TABLE IF NOT EXISTS currency_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                operation_date TEXT NOT NULL,
+                owner TEXT NOT NULL,
+                owner_slot INTEGER NOT NULL,
+                kind TEXT NOT NULL CHECK(kind IN ('buy', 'sell')),
+                usd_cents INTEGER NOT NULL CHECK(usd_cents > 0),
+                rate TEXT NOT NULL,
+                byn_cents INTEGER NOT NULL DEFAULT 0,
+                cost_basis_cents INTEGER NOT NULL DEFAULT 0,
+                result_cents INTEGER NOT NULL DEFAULT 0,
+                usd_balance_cents INTEGER NOT NULL DEFAULT 0,
+                cost_balance_cents INTEGER NOT NULL DEFAULT 0,
+                transferred_entry_id INTEGER,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )""")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_currency_trades_date ON currency_trades(operation_date, id)")
             self._backfill_tax_calculations(db)
             self._recalculate_purchase_offsets(db)
+            self._recalculate_currency_trades(db)
 
     @staticmethod
     def _tax_calculation(amount_cents: int, vat: Decimal, profit: Decimal) -> tuple[int, int, int]:
@@ -360,38 +416,98 @@ class Ledger:
             )
 
     def _recalculate_purchase_offsets(self, db: sqlite3.Connection) -> None:
-        """Пересчитывает покупки по хронологии: встречный долг гасится до налогов."""
-        current_balance = 0
+        """Ведёт встречные требования лотами: покупки сопоставляются по полной цене."""
+        lots: list[dict[str, object]] = []
+
+        def lot_value(lot: dict[str, object]) -> int:
+            amount = int(lot["amount"])
+            if not lot["taxable"]:
+                return amount
+            return self._tax_calculation(amount, lot["vat"], lot["profit"])[2]
+
+        def total_balance() -> int:
+            return sum(int(lot["direction"]) * lot_value(lot) for lot in lots)
+
+        def consume_displayed(lot: dict[str, object], value: int) -> int:
+            """Уменьшает лот на заданную отображаемую сумму и возвращает реально зачтённое."""
+            available = lot_value(lot)
+            if value >= available:
+                lot["amount"] = 0
+                return available
+            if not lot["taxable"]:
+                lot["amount"] = int(lot["amount"]) - value
+                return value
+            original_amount = int(lot["amount"])
+            target_value = available - value
+            low, high = 0, original_amount
+            while low < high:
+                middle = (low + high) // 2
+                candidate = {**lot, "amount": middle}
+                if lot_value(candidate) < target_value:
+                    low = middle + 1
+                else:
+                    high = middle
+            lot["amount"] = low
+            return available - lot_value(lot)
+
         rows = db.execute("SELECT * FROM entries ORDER BY operation_date, id").fetchall()
         for row in rows:
+            before = total_balance()
             kind = row["kind"]
             mode = KINDS.get(kind, ("", "", 0, "debt"))[3]
             if mode != "debt":
-                db.execute("UPDATE entries SET balance_after_cents=? WHERE id=?", (current_balance, row["id"]))
+                db.execute(
+                    "UPDATE entries SET balance_after_cents=?, calculated_effect_cents=0 WHERE id=?",
+                    (before, row["id"]),
+                )
                 continue
+
             raw_cents = row["amount_byn_cents"] or row["amount_cents"]
             owner_direction = 1 if row["owner_slot"] == 2 else -1
             direction = owner_direction * row["sign"]
-            impact_cents = row["debt_amount_cents"] or raw_cents
+            is_purchase = kind in {"purchase", "personal_purchase"} and row["sign"] > 0
+            vat = Decimal(row["vat_rate"] or DEFAULT_VAT_RATE)
+            profit = Decimal(row["profit_tax_rate"] or DEFAULT_PROFIT_TAX_RATE)
+            if kind in {"repayment_bank", "repayment_cash"}:
+                method = row["repayment_method"] or ("cash" if kind == "repayment_cash" else "account")
+                raw_cents = int((Decimal(raw_cents) / 2).quantize(Decimal("1"), rounding=ROUND_HALF_UP)) if method == "cash" else raw_cents
+
+            remaining = raw_cents
             offset_cents = 0
-            if kind in {"purchase", "personal_purchase"}:
-                if current_balance and current_balance * direction < 0:
-                    offset_cents = min(raw_cents, abs(current_balance))
-                excess_cents = raw_cents - offset_cents
-                vat = Decimal(row["vat_rate"] or DEFAULT_VAT_RATE)
-                profit = Decimal(row["profit_tax_rate"] or DEFAULT_PROFIT_TAX_RATE)
-                vat_cents, profit_cents, net_excess = self._tax_calculation(excess_cents, vat, profit) if excess_cents else (0, 0, 0)
-                impact_cents = offset_cents + net_excess
+            for lot in lots:
+                if remaining <= 0:
+                    break
+                if int(lot["direction"]) != -direction or int(lot["amount"]) <= 0:
+                    continue
+                if is_purchase:
+                    consumed = min(remaining, int(lot["amount"]))
+                    lot["amount"] = int(lot["amount"]) - consumed
+                else:
+                    consumed = consume_displayed(lot, remaining)
+                remaining -= consumed
+                offset_cents += consumed
+            lots[:] = [lot for lot in lots if int(lot["amount"]) > 0]
+            if remaining > 0:
+                lots.append({"direction": direction, "amount": remaining, "taxable": is_purchase,
+                             "vat": vat, "profit": profit})
+
+            after = total_balance()
+            effect = after - before
+            if is_purchase:
+                vat_cents, profit_cents, net_remaining = self._tax_calculation(remaining, vat, profit) if remaining else (0, 0, 0)
                 db.execute(
                     """UPDATE entries SET vat_rate=?, profit_tax_rate=?, vat_cents=?, profit_tax_cents=?,
-                    debt_amount_cents=?, purchase_offset_cents=? WHERE id=?""",
-                    (str(vat), str(profit), vat_cents, profit_cents, impact_cents, offset_cents, row["id"]),
+                    debt_amount_cents=?, purchase_offset_cents=?, balance_after_cents=?, calculated_effect_cents=?
+                    WHERE id=?""",
+                    (str(vat), str(profit), vat_cents, profit_cents, abs(effect), offset_cents,
+                     after, effect, row["id"]),
                 )
-            elif kind in {"repayment_bank", "repayment_cash"}:
-                method = row["repayment_method"] or ("cash" if kind == "repayment_cash" else "account")
-                impact_cents = int((Decimal(raw_cents) / 2).quantize(Decimal("1"), rounding=ROUND_HALF_UP)) if method == "cash" else raw_cents
-            current_balance += impact_cents * direction
-            db.execute("UPDATE entries SET balance_after_cents=? WHERE id=?", (current_balance, row["id"]))
+            else:
+                db.execute(
+                    """UPDATE entries SET purchase_offset_cents=0, balance_after_cents=?,
+                    calculated_effect_cents=? WHERE id=?""",
+                    (after, effect, row["id"]),
+                )
 
     def settings(self) -> dict[str, object]:
         with self.connect() as db:
@@ -425,6 +541,8 @@ class Ledger:
         with self.connect() as db:
             db.execute("UPDATE entries SET owner=? WHERE owner_slot=1", (owner1,))
             db.execute("UPDATE entries SET owner=? WHERE owner_slot=2", (owner2,))
+            db.execute("UPDATE currency_trades SET owner=? WHERE owner_slot=1", (owner1,))
+            db.execute("UPDATE currency_trades SET owner=? WHERE owner_slot=2", (owner2,))
             for key, value in {"owner1": owner1, "owner2": owner2, "firms": json.dumps(clean_firms, ensure_ascii=False),
                                "vat_rate": str(vat), "profit_tax_rate": str(profit)}.items():
                 db.execute("INSERT OR REPLACE INTO fitnes_settings(key, value) VALUES (?, ?)", (key, value))
@@ -576,6 +694,103 @@ class Ledger:
             "fx_difference": sum(item.fx_difference_cents for item in entries),
         }
 
+    def _recalculate_currency_trades(self, db: sqlite3.Connection) -> None:
+        usd_balance = 0
+        cost_balance = 0
+        rows = db.execute("SELECT * FROM currency_trades ORDER BY operation_date, id").fetchall()
+        for row in rows:
+            usd = row["usd_cents"]
+            rate = Decimal(row["rate"])
+            received_or_spent = int((Decimal(usd) * rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+            if row["kind"] == "buy":
+                usd_balance += usd
+                cost_balance += received_or_spent
+                cost_basis = received_or_spent
+                result = 0
+            else:
+                if usd > usd_balance:
+                    raise ValueError("Нельзя продать больше USD, чем есть на валютном балансе")
+                cost_basis = int((Decimal(cost_balance) * Decimal(usd) / Decimal(usd_balance)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+                usd_balance -= usd
+                cost_balance -= cost_basis
+                result = cost_basis - received_or_spent
+            db.execute(
+                """UPDATE currency_trades SET byn_cents=?, cost_basis_cents=?, result_cents=?,
+                usd_balance_cents=?, cost_balance_cents=? WHERE id=?""",
+                (received_or_spent, cost_basis, result, usd_balance, cost_balance, row["id"]),
+            )
+
+    def add_currency_trade(self, *, operation_date: str, owner: str, kind: str,
+                           usd_amount: str | Decimal, rate: str | Decimal) -> int:
+        try:
+            date.fromisoformat(operation_date)
+        except ValueError as exc:
+            raise ValueError("Некорректная дата валютной операции") from exc
+        if owner not in self.owners:
+            raise ValueError("Выберите собственника валютной операции")
+        if kind not in {"buy", "sell"}:
+            raise ValueError("Выберите покупку или продажу USD")
+        usd_cents = money_to_cents(usd_amount)
+        rate_value = decimal_value(rate)
+        with self.connect() as db:
+            cursor = db.execute(
+                """INSERT INTO currency_trades(operation_date, owner, owner_slot, kind, usd_cents, rate)
+                VALUES (?, ?, ?, ?, ?, ?)""",
+                (operation_date, owner, self.owners.index(owner) + 1, kind, usd_cents, str(rate_value)),
+            )
+            try:
+                self._recalculate_currency_trades(db)
+            except ValueError:
+                db.execute("DELETE FROM currency_trades WHERE id=?", (cursor.lastrowid,))
+                self._recalculate_currency_trades(db)
+                raise
+            return int(cursor.lastrowid)
+
+    def list_currency_trades(self) -> list[CurrencyTrade]:
+        with self.connect() as db:
+            rows = db.execute("SELECT * FROM currency_trades ORDER BY operation_date DESC, id DESC").fetchall()
+        return [CurrencyTrade(**dict(row)) for row in rows]
+
+    def currency_summary(self) -> dict[str, int]:
+        trades = self.list_currency_trades()
+        latest = max(trades, key=lambda item: (item.operation_date, item.id), default=None)
+        return {
+            "usd_balance": latest.usd_balance_cents if latest else 0,
+            "cost_balance": latest.cost_balance_cents if latest else 0,
+            "realized_loss": sum(item.loss_cents for item in trades if item.kind == "sell"),
+            "transferred_loss": sum(item.loss_cents for item in trades if item.transferred_entry_id),
+        }
+
+    def transfer_currency_loss(self, trade_id: int) -> int:
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM currency_trades WHERE id=?", (trade_id,)).fetchone()
+        if not row:
+            raise ValueError("Валютная операция не найдена")
+        trade = CurrencyTrade(**dict(row))
+        if trade.kind != "sell" or trade.loss_cents <= 0:
+            raise ValueError("Переносить можно только фактическую потерю от продажи USD")
+        if trade.transferred_entry_id and self.get(trade.transferred_entry_id):
+            raise ValueError("Эта курсовая потеря уже добавлена в общий расчёт")
+        entry_id = self.add(
+            operation_date=trade.operation_date, kind="adjustment", amount=trade.loss_cents,
+            sign=1, owner=trade.owner, currency="BYN",
+            description=f"Курсовая потеря USD по валютной операции №{trade.id}: {trade.result_note}",
+        )
+        with self.connect() as db:
+            db.execute("UPDATE currency_trades SET transferred_entry_id=? WHERE id=?", (entry_id, trade.id))
+        return entry_id
+
+    def delete_currency_trade(self, trade_id: int) -> bool:
+        with self.connect() as db:
+            row = db.execute("SELECT transferred_entry_id FROM currency_trades WHERE id=?", (trade_id,)).fetchone()
+            if not row:
+                return False
+            if row[0] and self.get(row[0]):
+                raise ValueError("Сначала удалите связанную запись из общего расчёта")
+            db.execute("DELETE FROM currency_trades WHERE id=?", (trade_id,))
+            self._recalculate_currency_trades(db)
+            return True
+
     def import_csv(self, source: str | Path) -> int:
         raw = Path(source).read_bytes()
         return self.import_csv_bytes(raw)
@@ -671,6 +886,7 @@ class Ledger:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 prepared,
             )
+            self._recalculate_purchase_offsets(db)
         return len(prepared)
 
     def export_csv(self, destination: str | Path) -> Path:

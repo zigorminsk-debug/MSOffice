@@ -245,3 +245,53 @@ def test_backdated_change_recalculates_later_purchase_offset(tmp_path):
     assert ledger.get(purchase_id).debt_amount_cents == 13_334
     ledger.delete(debt_id)
     assert ledger.get(purchase_id).debt_amount_cents == 10_000
+
+
+def test_equal_opposite_owner_purchases_cancel_at_gross_value(tmp_path):
+    ledger = Ledger(tmp_path / "equal-purchases.db")
+    first_id = ledger.add(operation_date="2026-10-20", kind="personal_purchase", amount="100", sign=1,
+                          owner="Собственник 2", currency="BYN")
+    second_id = ledger.add(operation_date="2026-10-20", kind="personal_purchase", amount="100", sign=1,
+                           owner="Собственник 1", currency="BYN")
+    first, second = ledger.get(first_id), ledger.get(second_id)
+    assert first.balance_after_cents == 6666
+    assert second.purchase_offset_cents == 10_000
+    assert second.balance_after_cents == 0
+    assert ledger.summary()["debt"] == 0
+
+
+def test_usd_balance_realized_loss_and_transfer_to_general_ledger(tmp_path):
+    ledger = Ledger(tmp_path / "currency.db")
+    buy_id = ledger.add_currency_trade(operation_date="2026-10-20", owner="Собственник 2",
+                                       kind="buy", usd_amount="100", rate="3.30")
+    sell_id = ledger.add_currency_trade(operation_date="2026-10-21", owner="Собственник 2",
+                                        kind="sell", usd_amount="40", rate="3.10")
+    trades = {item.id: item for item in ledger.list_currency_trades()}
+    assert trades[buy_id].byn_cents == 33_000
+    assert trades[sell_id].cost_basis_cents == 13_200
+    assert trades[sell_id].byn_cents == 12_400
+    assert trades[sell_id].loss_cents == 800
+    assert trades[sell_id].usd_balance_cents == 6_000
+    assert trades[sell_id].cost_balance_cents == 19_800
+    assert ledger.summary()["debt"] == 0
+    entry_id = ledger.transfer_currency_loss(sell_id)
+    assert ledger.summary()["debt"] == 800
+    assert ledger.get(entry_id).owner == "Собственник 2"
+    assert ledger.list_currency_trades()[0].transferred_entry_id == entry_id
+    try:
+        ledger.transfer_currency_loss(sell_id)
+        assert False, "Повторный перенос должен быть запрещён"
+    except ValueError as error:
+        assert "уже добавлена" in str(error)
+
+
+def test_usd_sale_cannot_exceed_balance(tmp_path):
+    ledger = Ledger(tmp_path / "currency-limit.db")
+    ledger.add_currency_trade(operation_date="2026-10-20", owner="Собственник 1",
+                              kind="buy", usd_amount="10", rate="3.3")
+    try:
+        ledger.add_currency_trade(operation_date="2026-10-21", owner="Собственник 1",
+                                  kind="sell", usd_amount="11", rate="3.1")
+        assert False, "Ожидалась ошибка остатка USD"
+    except ValueError as error:
+        assert "больше USD" in str(error)
