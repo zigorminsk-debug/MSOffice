@@ -1,0 +1,37 @@
+name: Currency balance artifact
+
+on:
+  push:
+    branches:
+      - arena/6dc0006b-msoffice
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Validate and package HTML app
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+
+      - name: Validate JavaScript and app files
+        run: |
+          node --check app.js
+          test -s index.html
+          test -s styles.css
+          test -s app.js
+
+      - name: Upload downloadable app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fitnes-currency-balance-html
+          path: |
+            index.html
+            styles.css
+            app.js
+            README.md
+          if-no-files-found: error
+          retention-days: 14

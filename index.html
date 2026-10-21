@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#12251f">
+  <title>FITNES — валютный баланс USD</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <div class="app-window">
+    <header class="app-header">
+      <div class="app-identity">
+        <div class="app-brand">FITNES <span>·</span> БАЛАНС В BYN</div>
+        <h1>Валютный баланс USD</h1>
+        <p>Покупка и продажа долларов по курсу банка</p>
+      </div>
+
+      <div class="header-balances" aria-label="Текущие остатки">
+        <div class="header-balance"><span id="header-byn-label">BYN-счёт · Юра</span><strong id="header-byn">100,00 Br</strong></div>
+        <div class="header-balance"><span id="header-usd-label">Остаток USD · Юра</span><strong id="header-usd">0,00 $</strong></div>
+      </div>
+
+      <div class="header-actions">
+        <button class="toolbar-button" id="open-opening-dialog" type="button">Настройки</button>
+        <button class="toolbar-button" id="help-button" type="button">Инструкция</button>
+        <button class="toolbar-button" id="export-csv" type="button">Экспорт CSV</button>
+      </div>
+    </header>
+
+    <nav class="work-tabs" aria-label="Разделы приложения">
+      <button class="work-tab" type="button" disabled>Общий расчёт</button>
+      <button class="work-tab is-active" type="button" aria-current="page">Валютный баланс USD</button>
+    </nav>
+
+    <main class="main-content">
+      <fieldset class="operation-panel">
+        <legend>Операция с USD</legend>
+        <form id="trade-form" novalidate>
+          <div class="operation-fields">
+            <label class="form-field" for="operation-date">
+              <span class="field-label">Дата</span>
+              <input id="operation-date" name="date" type="date" required>
+            </label>
+
+            <label class="form-field" for="owner-select">
+              <span class="field-label">Собственник</span>
+              <select id="owner-select" name="owner">
+                <option value="Юра">Юра</option>
+                <option value="Игорь">Игорь</option>
+              </select>
+            </label>
+
+            <label class="form-field" for="operation-select">
+              <span class="field-label">Операция</span>
+              <select id="operation-select" name="operation">
+                <option value="buy">Покупка USD</option>
+                <option value="sell">Продажа USD</option>
+              </select>
+            </label>
+
+            <label class="form-field amount-field" for="amount-input">
+              <span class="field-label" id="amount-label">Сумма BYN</span>
+              <span class="amount-entry">
+                <input id="amount-input" name="amount" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" value="">
+                <select id="input-currency" name="inputCurrency" aria-label="Валюта вводимой суммы">
+                  <option value="BYN" selected>BYN</option>
+                  <option value="USD">USD</option>
+                </select>
+              </span>
+              <span class="field-hint" id="amount-hint">Доступно: 100,00 Br</span>
+            </label>
+
+            <label class="form-field" for="rate-input">
+              <span class="field-label" id="rate-label">Курс банка BYN/USD</span>
+              <span class="rate-entry">
+                <input id="rate-input" name="rate" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" value="">
+                <span>BYN/USD</span>
+              </span>
+              <span class="field-hint" id="rate-hint">Банк продаёт USD вам</span>
+            </label>
+
+            <button class="add-button" id="submit-trade" type="submit">Добавить</button>
+          </div>
+
+          <div class="conversion-preview" id="conversion-preview" aria-live="polite">
+            <span class="preview-arrow" aria-hidden="true">↔</span>
+            <div class="preview-copy">
+              <span id="preview-caption">Результат по курсу банка</span>
+              <strong id="preview-value">100,00 Br → 35,00 $</strong>
+            </div>
+            <strong class="preview-result" id="preview-result">Получите 35,00 USD</strong>
+          </div>
+
+          <p class="form-feedback" id="trade-feedback" role="status" aria-live="polite"></p>
+          <p class="operation-hint" id="operation-hint">Покупка: укажите сумму в BYN или целевую сумму в USD. Для покупки используется курс продажи банка.</p>
+        </form>
+      </fieldset>
+
+      <section class="account-summary" aria-label="Сводка валютного счёта">
+        <div class="summary-item"><span id="summary-usd-label">Остаток · Юра</span><strong id="summary-usd">0,00 $</strong></div>
+        <span class="summary-separator" aria-hidden="true">·</span>
+        <div class="summary-item"><span>Себестоимость</span><strong id="summary-cost">0,00 Br</strong></div>
+        <span class="summary-separator" aria-hidden="true">·</span>
+        <div class="summary-item"><span id="summary-pnl-label">Реализованный результат</span><strong id="summary-pnl">0,00 Br</strong></div>
+        <span class="summary-separator" aria-hidden="true">·</span>
+        <div class="summary-item"><span>Перенесено</span><strong id="summary-transferred">0,00 Br</strong></div>
+      </section>
+
+      <section class="history-section" aria-labelledby="history-title">
+        <div class="history-toolbar">
+          <h2 id="history-title">Операции с USD</h2>
+          <button class="clear-button" id="clear-history" type="button" hidden>Очистить журнал</button>
+        </div>
+        <div class="table-scroll">
+          <table class="history-table">
+            <thead>
+              <tr>
+                <th>Дата</th>
+                <th>Собственник</th>
+                <th>Операция</th>
+                <th>USD</th>
+                <th>Курс</th>
+                <th>BYN</th>
+                <th>Себестоимость</th>
+                <th>Результат</th>
+                <th>Общий расчёт</th>
+              </tr>
+            </thead>
+            <tbody id="history-body"></tbody>
+          </table>
+          <div class="empty-history" id="empty-history">
+            <strong>Операций пока нет</strong>
+            <span>Добавьте покупку или продажу USD — она появится в журнале.</span>
+          </div>
+        </div>
+      </section>
+
+      <footer class="page-footer">
+        <span>Покупка учитывается по курсу продажи банка, продажа — по курсу покупки банка.</span>
+        <span>Результат продажи считается по средневзвешенной себестоимости. Комиссии не учитываются.</span>
+      </footer>
+    </main>
+  </div>
+
+  <dialog class="app-dialog" id="opening-dialog" aria-labelledby="opening-title">
+    <div class="dialog-inner">
+      <button class="dialog-x" id="close-opening-dialog" type="button" aria-label="Закрыть">×</button>
+      <h2 id="opening-title">Начальный остаток BYN</h2>
+      <p>Укажите сумму BYN на счёте до первой валютной операции.</p>
+      <label class="form-field" for="opening-amount-input">
+        <span class="field-label">Начальный остаток</span>
+        <input id="opening-amount-input" type="text" inputmode="decimal" autocomplete="off" value="100.00">
+      </label>
+      <p class="dialog-feedback" id="opening-feedback" aria-live="polite"></p>
+      <div class="dialog-actions">
+        <button class="toolbar-button" id="cancel-opening-dialog" type="button">Отмена</button>
+        <button class="add-button" id="save-opening-dialog" type="button">Сохранить</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="app-dialog help-dialog" id="help-dialog" aria-labelledby="help-title">
+    <div class="dialog-inner">
+      <button class="dialog-x" id="close-help-dialog" type="button" aria-label="Закрыть">×</button>
+      <h2 id="help-title">Как работает валютный учёт</h2>
+      <p><strong>Покупка USD:</strong> в поле суммы выберите BYN, чтобы ввести бюджет и рассчитать доллары, либо USD, чтобы задать желаемую сумму долларов и рассчитать списание BYN. Используется курс продажи банка.</p>
+      <p><strong>Продажа USD:</strong> можно указать количество долларов к продаже или желаемое зачисление в BYN. Используется курс покупки банка.</p>
+      <p>При продаже из поступивших BYN вычитается себестоимость проданной части USD по средневзвешенному курсу. Разница — реализованная прибыль или убыток.</p>
+      <p><strong>Пример:</strong> 100 BYN по курсу 2,857142857 дают 35 USD. Если продать 10 USD по 3,00 BYN/USD, поступит 30 BYN; себестоимость — 28,57 BYN, прибыль — 1,43 BYN.</p>
+      <p class="dialog-muted">Приложение только ведёт журнал в этом браузере и не отправляет операции в банк.</p>
+      <div class="dialog-actions"><button class="add-button" id="close-help-button" type="button">Понятно</button></div>
+    </div>
+  </dialog>
+</body>
+</html>
