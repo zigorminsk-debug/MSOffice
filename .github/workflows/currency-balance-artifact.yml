@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - arena/6dc0006b-msoffice
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
