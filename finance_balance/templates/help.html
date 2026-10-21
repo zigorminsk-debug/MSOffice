@@ -1,0 +1,6 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Инструкция · Fitnes</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"></head><body>
+<header class="topbar"><div class="brand"><span class="brand-mark">?</span><div><strong>Инструкция</strong><small>Единый реестр функций Fitnes</small></div></div><a class="button secondary" href="{{ url_for('index') }}">← Вернуться</a></header>
+<main class="help-page"><section class="help-hero"><span class="eyebrow">РУКОВОДСТВО ПОЛЬЗОВАТЕЛЯ</span><h1>Как пользоваться программой</h1><p>Инструкция автоматически строится из единого реестра функций GUI и HTML.</p></section>
+<nav class="help-nav">{% for section in sections %}<a href="#{{ section.id }}">{{ section.title }}</a>{% endfor %}</nav>
+{% for section in sections %}<section class="help-section" id="{{ section.id }}"><span class="step">{{ '%02d'|format(loop.index) }}</span><div><h2>{{ section.title }}</h2>{% for paragraph in section.paragraphs %}<p>{{ paragraph }}</p>{% endfor %}{% if section['items'] %}<ul>{% for item in section['items'] %}<li>{{ item }}</li>{% endfor %}</ul>{% endif %}</div></section>{% endfor %}
+</main><footer>Fitnes · Встроенная инструкция</footer></body></html>

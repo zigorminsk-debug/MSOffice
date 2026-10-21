@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Валютный баланс USD · Fitnes</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">$</span>
+    <div><strong>Валютный баланс USD</strong><small>Отдельный учёт покупки и продажи валюты</small></div>
+  </div>
+  <div class="header-actions">
+    <a class="button secondary" href="{{ url_for('index') }}">Общий расчёт</a>
+    <a class="button secondary" href="{{ url_for('help_page') }}">? Инструкция</a>
+  </div>
+</header>
+<main>
+  {% with messages=get_flashed_messages(with_categories=true) %}
+    {% for category,message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}
+  {% endwith %}
+
+  <section class="stats currency-stats">
+    <article><span>Остаток USD</span><strong>{{ summary.usd_balance|money('USD') }}</strong></article>
+    <article><span>Себестоимость остатка</span><strong>{{ summary.cost_balance|money }}</strong></article>
+    <article><span>Реализованная потеря</span><strong>{{ summary.realized_loss|money }}</strong></article>
+    <article><span>Реализованная прибыль</span><strong>{{ summary.realized_profit|money }}</strong></article>
+    <article><span>Перенесено в общий расчёт</span><strong>{{ summary.transferred_loss|money }}</strong></article>
+  </section>
+
+  <div class="layout">
+    <section class="card form-card">
+      <div class="section-title">
+        <div><span class="eyebrow">НОВАЯ ОПЕРАЦИЯ</span><h2>Покупка или продажа USD</h2></div>
+      </div>
+      <form id="currency-trade-form" method="post" action="{{ url_for('add_currency_trade') }}">
+        <label>Дата
+          <input type="date" name="operation_date" value="{{ today }}" required>
+        </label>
+        <label>Собственник
+          <select name="owner">
+            {% for owner in owners %}<option {{ 'selected' if owner==owners[1] }}>{{ owner }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>Операция
+          <select id="trade-kind" name="kind">
+            <option value="buy" selected>Покупка USD у банка</option>
+            <option value="sell">Продажа USD банку</option>
+          </select>
+        </label>
+        <label class="currency-input-label">
+          <span id="amount-caption">Сумма в BYN</span>
+          <span class="currency-amount-row">
+            <input id="trade-amount" name="amount" inputmode="decimal" placeholder="1000,00" required>
+            <select id="amount-currency" name="input_currency" aria-label="Валюта вводимой суммы">
+              <option value="BYN" selected>BYN</option>
+              <option value="USD">USD</option>
+            </select>
+          </span>
+          <small class="field-help">Введите сумму в BYN или USD — валюта выбирается рядом.</small>
+        </label>
+        <label>Курс банка BYN/USD
+          <input id="trade-rate" name="rate" inputmode="decimal" placeholder="3,3000" required>
+          <small class="field-help">При покупке используется курс продажи банка; при продаже — курс покупки.</small>
+        </label>
+        <div id="currency-preview" class="currency-preview" aria-live="polite">Укажите сумму и курс — здесь появится расчёт операции.</div>
+        <div class="hint">При покупке сумма в BYN становится себестоимостью приобретённых USD. При продаже программа рассчитывает средневзвешенную себестоимость и показывает прибыль или потерю. В общий расчёт переносится только положительная потеря и только по отдельной кнопке.</div>
+        <button class="button primary">Добавить валютную операцию</button>
+      </form>
+    </section>
+
+    <section class="card ledger-card">
+      <div class="section-title">
+        <div><span class="eyebrow">ИСТОРИЯ USD</span><h2>Валютные операции</h2></div>
+        <span class="count">{{ trades|length }} записей</span>
+      </div>
+      {% if trades %}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Дата / собственник</th><th>Операция</th><th>USD / курс</th><th>Сумма BYN</th><th>Себестоимость / результат</th><th>Действия</th></tr></thead>
+            <tbody>
+              {% for trade in trades %}
+                <tr title="{{ trade.result_note }}">
+                  <td><strong>{{ trade.operation_date }}</strong><small>{{ trade.owner }}</small></td>
+                  <td><strong>{{ trade.kind_label }}</strong><small>Остаток: {{ trade.usd_balance_cents|money('USD') }}</small></td>
+                  <td>{{ trade.usd_cents|money('USD') }}<small>курс {{ trade.rate }} · введено {{ trade.input_cents|money(trade.input_currency) }}</small></td>
+                  <td>{{ trade.byn_cents|money }}</td>
+                  <td>
+                    {{ trade.cost_basis_cents|money }}
+                    {% if trade.kind=='sell' %}<small>{{ 'Потеря' if trade.result_cents>=0 else 'Прибыль' }}: {{ (trade.result_cents|abs)|money }}</small>{% endif %}
+                  </td>
+                  <td>
+                    <div class="row-actions">
+                      {% if trade.kind=='sell' and trade.loss_cents>0 and not trade.transferred_entry_id %}
+                        <form method="post" action="{{ url_for('transfer_currency_loss', trade_id=trade.id) }}"><button class="button secondary" title="Добавить потерю в общий расчёт">В общий расчёт</button></form>
+                      {% elif trade.transferred_entry_id %}
+                        <small>Добавлено, запись №{{ trade.transferred_entry_id }}</small>
+                      {% endif %}
+                      <form method="post" action="{{ url_for('delete_currency_trade', trade_id=trade.id) }}" onsubmit="return confirm('Удалить валютную операцию?')"><button class="delete" aria-label="Удалить валютную операцию">×</button></form>
+                    </div>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="empty"><div>$</div><h3>Валютных операций пока нет</h3><p>Начните с покупки USD по курсу продажи банка.</p></div>
+      {% endif %}
+    </section>
+  </div>
+</main>
+<footer>Fitnes · отдельный валютный баланс USD</footer>
+<script>
+(() => {
+  const kind = document.getElementById('trade-kind');
+  const amount = document.getElementById('trade-amount');
+  const currency = document.getElementById('amount-currency');
+  const rate = document.getElementById('trade-rate');
+  const caption = document.getElementById('amount-caption');
+  const preview = document.getElementById('currency-preview');
+  const usdBalance = {{ summary.usd_balance }};
+  const costBalance = {{ summary.cost_balance }};
+
+  const parseNumber = value => Number(String(value).trim().replace(/[\s\u00a0]/g, '').replace(',', '.'));
+  const roundMoney = value => Math.round((value + Number.EPSILON) * 100) / 100;
+  const display = value => roundMoney(value).toLocaleString('ru-RU', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+  function updatePreview() {
+    const operation = kind.value;
+    const unit = currency.value;
+    const input = parseNumber(amount.value);
+    const bankRate = parseNumber(rate.value);
+    caption.textContent = `Сумма в ${unit}`;
+    if (!Number.isFinite(input) || input <= 0 || !Number.isFinite(bankRate) || bankRate <= 0) {
+      preview.textContent = 'Укажите сумму и курс — здесь появится расчёт операции.';
+      return;
+    }
+    const usd = unit === 'BYN' ? roundMoney(input / bankRate) : roundMoney(input);
+    const byn = unit === 'BYN' ? roundMoney(input) : roundMoney(usd * bankRate);
+    const flow = operation === 'buy' ? `Покупка: ${display(byn)} Br → примерно ${display(usd)} $` : `Продажа: ${display(usd)} $ → ${display(byn)} Br`;
+    if (operation === 'buy') {
+      preview.textContent = flow;
+      return;
+    }
+    const usdCents = Math.round(usd * 100);
+    if (usdCents > usdBalance) {
+      preview.textContent = `${flow}. На валютном балансе недостаточно USD.`;
+      return;
+    }
+    const cost = usdBalance ? roundMoney((costBalance * usdCents / usdBalance) / 100) : 0;
+    const result = roundMoney(cost - byn);
+    const resultText = result > 0 ? `потеря ${display(result)} Br` : result < 0 ? `прибыль ${display(-result)} Br` : 'без прибыли и потери';
+    preview.textContent = `${flow}; средняя себестоимость ≈ ${display(cost)} Br, ${resultText}.`;
+  }
+
+  kind.addEventListener('change', () => {
+    currency.value = kind.value === 'buy' ? 'BYN' : 'USD';
+    amount.value = '';
+    updatePreview();
+  });
+  amount.addEventListener('input', updatePreview);
+  currency.addEventListener('change', updatePreview);
+  rate.addEventListener('input', updatePreview);
+})();
+</script>
+</body>
+</html>
