@@ -1,0 +1,94 @@
+name: Test and build
+
+on:
+  push:
+    branches: [main, "arena/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pytest -v
+
+  build-windows:
+    name: Windows application
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Build application files
+        shell: pwsh
+        run: >-
+          pyinstaller --noconfirm --clean --onedir --windowed --noupx
+          --name "Fitnes"
+          --icon "assets/fitnes-icon.ico"
+          --version-file "installer/version_info.txt"
+          --collect-all flask
+          --collect-all pymorphy3
+          --collect-all pymorphy3_dicts_ru
+          --add-data "finance_balance/templates;finance_balance/templates"
+          --add-data "finance_balance/static;finance_balance/static"
+          run.py
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "installer\Fitnes.iss"
+      - name: Verify installer and create checksum
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/installer/Fitnes-Setup.exe")) { exit 1 }
+          $hash = (Get-FileHash "dist/installer/Fitnes-Setup.exe" -Algorithm SHA256).Hash.ToLower()
+          "$hash  Fitnes-Setup.exe" | Out-File "dist/installer/SHA256SUMS.txt" -Encoding ascii
+          Get-Item "dist/installer/Fitnes-Setup.exe"
+          Get-Content "dist/installer/SHA256SUMS.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Fitnes-Windows-Installer
+          path: |
+            dist/installer/Fitnes-Setup.exe
+            dist/installer/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish browser-friendly ZIP
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/arena/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $versionLine = Get-Content "finance_balance/__init__.py" | Select-String '__version__ = "([^"]+)"'
+          $version = $versionLine.Matches[0].Groups[1].Value
+          $tag = "v$version"
+          $zip = "dist/installer/Fitnes-$version-Windows.zip"
+          Compress-Archive -Path "dist/installer/Fitnes-Setup.exe", "dist/installer/SHA256SUMS.txt" -DestinationPath $zip -Force
+          $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          $zipChecksum = "$zip.sha256"
+          "$zipHash  Fitnes-$version-Windows.zip" | Out-File $zipChecksum -Encoding ascii
+          gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $zip $zipChecksum --clobber --repo $env:GITHUB_REPOSITORY
+          } else {
+            gh release create $tag $zip $zipChecksum --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "Fitnes $version" --notes "Установочная версия Fitnes для Windows. Скачайте ZIP-архив, распакуйте его и запустите Fitnes-Setup.exe. Контрольная сумма находится в отдельном файле SHA256."
+          }
