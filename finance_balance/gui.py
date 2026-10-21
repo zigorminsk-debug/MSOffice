@@ -185,7 +185,7 @@ class BalanceGUI(tk.Tk):
         self.save_button.grid(row=1, column=7, padx=4, pady=(18, 3), sticky="ew")
         self.deposit_source_box = field("Источник депозита / от кого получены деньги", "deposit_source", 2, 0, span=4, values=self.ledger.parties, width=36)
         self.payment_method_box = field("Путь возврата долга", "payment_method", 2, 4, span=2, values=["Со счёта", "Наличными"], width=18)
-        tk.Label(form, text="Со счёта — вся сумма; наличными — сумма делится на 2", bg="#fff", fg="#7b8780", font=("Segoe UI", 8), wraplength=260, justify="left").grid(row=2, column=6, columnspan=2, sticky="w", padx=6, pady=(18, 0))
+        tk.Label(form, text="Со счёта и наличными лично — долг уменьшается на всю сумму", bg="#fff", fg="#7b8780", font=("Segoe UI", 8), wraplength=260, justify="left").grid(row=2, column=6, columnspan=2, sticky="w", padx=6, pady=(18, 0))
         self.editing_id: int | None = None
         self.edit_note_label = tk.Label(form, text="", bg="#fff", fg="#7b5b24", font=("Segoe UI", 8, "bold"), anchor="w")
         self.edit_note_label.grid(row=3, column=0, columnspan=8, sticky="ew", padx=4, pady=(5, 0))

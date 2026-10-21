@@ -66,7 +66,7 @@ def test_web_personal_purchase_tooltip_and_settings(tmp_path):
     assert "Второй должен Первому".encode("utf-8") in result.data
 
 
-def test_web_cash_repayment_shows_half_calculation(tmp_path):
+def test_web_cash_repayment_uses_full_amount(tmp_path):
     app = create_app(tmp_path / "cash-web.db")
     app.config.update(TESTING=True)
     client = app.test_client()
@@ -74,10 +74,10 @@ def test_web_cash_repayment_shows_half_calculation(tmp_path):
     client.post("/entries", data={**common, "operation_date": "2026-10-20", "kind": "purchase",
                                   "amount": "100", "sign": "1"})
     response = client.post("/entries", data={**common, "operation_date": "2026-10-21", "kind": "repayment_cash",
-                                             "amount": "133.32", "sign": "-1", "repayment_method": "cash"},
+                                             "amount": "66.66", "sign": "-1", "repayment_method": "cash"},
                            follow_redirects=True)
     assert "Расчёты закрыты".encode("utf-8") in response.data
-    assert "133,32 Br ÷ 2 = уменьшение долга 66,66 Br".encode("utf-8") in response.data
+    assert "Погашение наличными лично второму собственнику: долг уменьшен на полную сумму 66,66 Br".encode("utf-8") in response.data
 
 
 def test_web_purchase_offsets_gross_debt_before_taxing_excess(tmp_path):

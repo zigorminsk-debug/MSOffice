@@ -1,5 +1,5 @@
 #define MyAppName "Fitnes"
-#define MyAppVersion "2.5.0"
+#define MyAppVersion "2.5.1"
 #define MyAppPublisher "Fitnes"
 #define MyAppExeName "Fitnes.exe"
 

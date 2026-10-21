@@ -170,8 +170,6 @@ class Entry:
     @property
     def balance_amount_cents(self) -> int:
         amount = self.settlement_cents
-        if self.kind in {"repayment_bank", "repayment_cash"} and self.effective_repayment_method == "cash":
-            return int((Decimal(amount) / 2).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
         return amount
 
     @property
@@ -179,8 +177,8 @@ class Entry:
         if self.kind not in {"repayment_bank", "repayment_cash"}:
             return ""
         if self.effective_repayment_method == "cash":
-            return f"Погашение наличными: {format_money(self.byn_cents)} ÷ 2 = уменьшение долга {format_money(self.balance_amount_cents)}"
-        return f"Погашение со счёта: уменьшение долга на полную сумму {format_money(self.balance_amount_cents)}"
+            return f"Погашение наличными лично второму собственнику: долг уменьшен на полную сумму {format_money(self.balance_amount_cents)}"
+        return f"Погашение со счёта: долг уменьшен на полную сумму {format_money(self.balance_amount_cents)}"
 
     @property
     def calculation_note(self) -> str:
@@ -468,10 +466,6 @@ class Ledger:
             is_purchase = kind in {"purchase", "personal_purchase"} and row["sign"] > 0
             vat = Decimal(row["vat_rate"] or DEFAULT_VAT_RATE)
             profit = Decimal(row["profit_tax_rate"] or DEFAULT_PROFIT_TAX_RATE)
-            if kind in {"repayment_bank", "repayment_cash"}:
-                method = row["repayment_method"] or ("cash" if kind == "repayment_cash" else "account")
-                raw_cents = int((Decimal(raw_cents) / 2).quantize(Decimal("1"), rounding=ROUND_HALF_UP)) if method == "cash" else raw_cents
-
             remaining = raw_cents
             offset_cents = 0
             for lot in lots:
