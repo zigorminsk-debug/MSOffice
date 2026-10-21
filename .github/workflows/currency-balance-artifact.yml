@@ -38,3 +38,42 @@ jobs:
             README.md
           if-no-files-found: error
           retention-days: 14
+
+  windows-exe:
+    name: Build Windows executable
+    runs-on: windows-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install packaging tools
+        run: python -m pip install --upgrade pip pyinstaller pywebview
+
+      - name: Build standalone windowed executable
+        shell: pwsh
+        run: >-
+          python -m PyInstaller --noconfirm --clean --onefile --windowed
+          --name FITNES-Currency
+          --add-data "index.html;app"
+          --add-data "styles.css;app"
+          --add-data "app.js;app"
+          --add-data "README.md;app"
+          --collect-all webview
+          --collect-all pythonnet
+          --collect-all clr_loader
+          --hidden-import webview.platforms.edgechromium
+          --hidden-import webview.platforms.winforms
+          launcher.py
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: fitnes-currency-balance-windows-exe
+          path: dist/FITNES-Currency.exe
+          if-no-files-found: error
+          retention-days: 14

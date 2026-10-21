@@ -10,6 +10,10 @@ python3 -m http.server 8000 --bind 0.0.0.0
 
 Откройте `http://localhost:8000`.
 
+## Windows-приложение
+
+Workflow GitHub Actions собирает `FITNES-Currency.exe`. После успешной сборки скачайте артефакт `fitnes-currency-balance-windows-exe` в разделе **Actions → Currency balance artifact → Artifacts**. Приложение открывает экран в отдельном окне WebView; для запуска нужен Microsoft Edge WebView2 Runtime (обычно уже установлен в Windows 10/11).
+
 ## Возможности
 
 - вкладка «Валютный баланс USD» с формой «Операция с USD»;
